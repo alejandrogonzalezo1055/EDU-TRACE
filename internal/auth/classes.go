@@ -63,6 +63,9 @@ type SubmissionMeta struct {
 	LatePenalty *float64 `json:"late_penalty,omitempty"`
 	TestsTotal int `json:"tests_total,omitempty"`
 	TestsPassed int `json:"tests_passed,omitempty"`
+	// Estado del envío oficial a Brightspace (d2l_*). Vacío si el taller no está espejado o no hay Python.
+	BrightspaceStatus string `json:"brightspace_status,omitempty"`
+	BrightspaceError string `json:"brightspace_error,omitempty"`
 }
 
 func (m *SubmissionMeta) IsAttempt() bool { return m.Kind == KindAttempt }
@@ -84,7 +87,8 @@ const (
 		(SELECT da.due_at FROM assignments da WHERE da.id = s.assignment_id),
 		(SELECT da.late_penalty FROM assignments da WHERE da.id = s.assignment_id),
 		(SELECT COUNT(*) FROM submission_tests st WHERE st.submission_id = s.id),
-		(SELECT COALESCE(SUM(st.passed), 0) FROM submission_tests st WHERE st.submission_id = s.id)`
+		(SELECT COALESCE(SUM(st.passed), 0) FROM submission_tests st WHERE st.submission_id = s.id),
+		s.d2l_status, s.d2l_error`
 	contentCols = `s.code, s.stdin, s.compiler_output, s.program_output, s.ai_feedback, s.ai_feedback_informal`
 )
 
@@ -94,7 +98,7 @@ func scanMeta(sc scanner, extra ...any) (SubmissionMeta, error) {
 	var due sql.NullString
 	var penalty sql.NullFloat64
 	dest := append([]any{&m.ID, &m.Kind, &m.GroupID, &m.AssignmentID, &m.StudentID, &created,
-		&m.Success, &m.RunError, &m.ExitCode, &m.Lines, &m.HasAIFeedback, &m.ErrorSummary, &m.CodeHash, &due, &penalty, &m.TestsTotal, &m.TestsPassed}, extra...)
+		&m.Success, &m.RunError, &m.ExitCode, &m.Lines, &m.HasAIFeedback, &m.ErrorSummary, &m.CodeHash, &due, &penalty, &m.TestsTotal, &m.TestsPassed, &m.BrightspaceStatus, &m.BrightspaceError}, extra...)
 	if err := sc.Scan(dest...); err != nil {
 		return m, err
 	}
@@ -262,8 +266,8 @@ func (s *Store) teacherCourses(teacherID string) ([]CourseSummary, error) {
 		}
 	}
 
-	rows, err = s.db.Query(`SELECT g.id, g.course_id, g.name, g.join_code, g.created_at, g.ai_mode,
-			(SELECT COUNT(*) FROM group_students gs WHERE gs.group_id = g.id),
+	rows, err = s.db.Query(`SELECT g.id, g.course_id, g.name, CASE WHEN g.external_id IS NULL THEN g.join_code ELSE '' END, g.created_at, g.ai_mode,
+			(SELECT COUNT(*) FROM group_students gs WHERE gs.group_id = g.id AND gs.active = 1),
 			(SELECT COUNT(*) FROM submissions s WHERE s.group_id = g.id AND s.kind = 'official')
 		FROM class_groups g JOIN courses c ON c.id = g.course_id
 		WHERE c.id IN (SELECT course_id FROM course_staff WHERE teacher_id = ?) ORDER BY g.created_at`, teacherID)
@@ -316,7 +320,7 @@ type GroupDetail struct {
 func (s *Store) ownedGroup(q querier, teacherID, groupID string) (*GroupDetail, error) {
 	g := &GroupDetail{ID: groupID, Students: []GroupStudent{}, Monitors: []GroupMonitor{}}
 	var closed sql.NullString
-	err := q.QueryRow(`SELECT g.name, g.join_code, c.id, c.name, g.ai_mode, c.closed_at
+	err := q.QueryRow(`SELECT g.name, CASE WHEN g.external_id IS NULL THEN g.join_code ELSE '' END, c.id, c.name, g.ai_mode, c.closed_at
 		FROM class_groups g JOIN courses c ON c.id = g.course_id
 		WHERE g.id = ? AND c.id IN (SELECT course_id FROM course_staff WHERE teacher_id = ?)`, groupID, teacherID).Scan(&g.Name, &g.JoinCode, &g.CourseID, &g.CourseName, &g.AIMode, &closed)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -351,7 +355,7 @@ func (s *Store) fillGroup(g *GroupDetail) error {
 		FROM group_students gs
 		JOIN users u ON u.id = gs.student_id
 		LEFT JOIN submissions s ON s.group_id = gs.group_id AND s.student_id = gs.student_id
-		WHERE gs.group_id = ?
+		WHERE gs.group_id = ? AND gs.active = 1
 		GROUP BY u.id`, g.ID)
 	if err != nil {
 		return err
@@ -513,7 +517,7 @@ func (s *Store) StudentGroups(studentID string) []StudentGroup {
 func (s *Store) studentGroups(studentID string) ([]StudentGroup, error) {
 	rows, err := s.db.Query(studentGroupSelect+`
 		JOIN group_students gs ON gs.group_id = g.id
-		WHERE gs.student_id = ?`, studentID)
+		WHERE gs.student_id = ? AND gs.active = 1`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +547,7 @@ func (s *Store) studentGroups(studentID string) ([]StudentGroup, error) {
 
 func isEnrolled(q querier, studentID, groupID string) (bool, error) {
 	var n int
-	err := q.QueryRow(`SELECT COUNT(*) FROM group_students WHERE group_id = ? AND student_id = ?`, groupID, studentID).Scan(&n)
+	err := q.QueryRow(`SELECT COUNT(*) FROM group_students WHERE group_id = ? AND student_id = ? AND active = 1`, groupID, studentID).Scan(&n)
 	return n > 0, err
 }
 
@@ -638,6 +642,10 @@ func (s *Store) AddSubmission(sub *Submission) error {
 		if err := enqueueJob(tx, sub.ID, sub.CreatedAt); err != nil {
 			return err
 		}
+		// D7: la entrega ya está guardada en Go; el espejo en Brightspace se envía después, desde la cola.
+		if err := s.queueSubmissionForD2L(tx, sub); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -670,7 +678,8 @@ func (s *Store) studentSubmissions(studentID, kind string, limit int) ([]Student
 			(SELECT COUNT(*) FROM code_annotations n JOIN users nu ON nu.id = n.author_id
 				WHERE n.submission_id = s.id AND nu.role = 'monitor' AND n.sent_at IS NOT NULL),
 			r.feedback, r.grade, r.returned_at, r.ai_at, COALESCE(r.feedback_origin, ''), COALESCE(rt.name, ''),
-			COALESCE((SELECT fr.understood FROM feedback_ratings fr WHERE fr.submission_id = s.id AND fr.student_id = s.student_id), '')
+			COALESCE((SELECT fr.understood FROM feedback_ratings fr WHERE fr.submission_id = s.id AND fr.student_id = s.student_id), ''),
+			COALESCE(r.d2l_status, '')
 		FROM submissions s
 		JOIN class_groups g ON g.id = s.group_id
 		JOIN courses c ON c.id = g.course_id
@@ -688,8 +697,8 @@ func (s *Store) studentSubmissions(studentID, kind string, limit int) ([]Student
 		var ss StudentSubmission
 		var feedback, returnedAt, aiAt sql.NullString
 		var grade sql.NullFloat64
-		var origin, teacherName, understood string
-		m, err := scanMeta(rows, &ss.GroupName, &ss.CourseName, &ss.AssignmentTitle, &ss.MonitorAnnotations, &feedback, &grade, &returnedAt, &aiAt, &origin, &teacherName, &understood)
+		var origin, teacherName, understood, d2lStatus string
+		m, err := scanMeta(rows, &ss.GroupName, &ss.CourseName, &ss.AssignmentTitle, &ss.MonitorAnnotations, &feedback, &grade, &returnedAt, &aiAt, &origin, &teacherName, &understood, &d2lStatus)
 		if err != nil {
 			return nil, err
 		}
@@ -697,6 +706,10 @@ func (s *Store) studentSubmissions(studentID, kind string, limit int) ([]Student
 		if feedback.Valid {
 			ss.Review = &StudentReview{Feedback: feedback.String, Grade: floatPtr(grade),
 				ReturnedAt: timePtr(returnedAt), AIAssisted: aiAt.Valid, Origin: origin, TeacherName: teacherName, Understood: understood}
+			if d2lStatus != "" {
+				published := d2lStatus == D2LSent
+				ss.Review.BrightspacePublished = &published
+			}
 		}
 		out = append(out, ss)
 	}
@@ -741,7 +754,7 @@ func (s *Store) StudentProcess(teacherID, groupID, studentID string, limit int) 
 	}
 	var name string
 	err := s.db.QueryRow(`SELECT u.name FROM group_students gs JOIN users u ON u.id = gs.student_id
-		WHERE gs.group_id = ? AND gs.student_id = ?`, groupID, studentID).Scan(&name)
+		WHERE gs.group_id = ? AND gs.student_id = ? AND gs.active = 1`, groupID, studentID).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, ErrNotFound
 	}

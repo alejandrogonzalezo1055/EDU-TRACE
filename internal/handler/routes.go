@@ -10,9 +10,11 @@ import (
 	"github.com/marlon/edu-trace/internal/auth"
 	"github.com/marlon/edu-trace/internal/compiler"
 	"github.com/marlon/edu-trace/internal/config"
+	"github.com/marlon/edu-trace/internal/pyclient"
 )
 
-func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaClient, store *auth.Store, drafts *DraftQueue, mailOn bool) http.Handler {
+// py es el cliente hacia el servicio Python (nil si PYTHON_BASE_URL está vacía).
+func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaClient, store *auth.Store, drafts *DraftQueue, mailOn bool, py *pyclient.Client) http.Handler {
 	mux := http.NewServeMux()
 	authH := NewAuthHandler(store, cfg)
 	compileFlight := auth.NewSingleFlight()
@@ -22,20 +24,43 @@ func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaCli
 		aiLimit = auth.NewLoginLimiter(cfg.AIRequestsPerHour, time.Hour)
 	}
 
-	mux.Handle("GET /api/health", NewHealthHandler(store, drafts, cfg.DataDir, cfg.DiskMinFreePercent))
+	mux.Handle("GET /api/health", NewHealthHandler(store, drafts, cfg.DataDir, cfg.DiskMinFreePercent).WithPython(py))
 
-	// Auth
-	mux.HandleFunc("POST /api/auth/register", authH.Register)
-	mux.HandleFunc("POST /api/auth/login", authH.Login)
+	// Auth. Brightspace (vía el servicio Python) es dueño de la identidad: la sesión de Go se abre solo
+	// con un ticket de un solo uso (ver /internal/v1/session-tickets).
+	mux.HandleFunc("GET /api/auth/session", authH.SessionByTicket)
 	mux.HandleFunc("POST /api/auth/logout", authH.Logout)
 	mux.Handle("GET /api/auth/me", auth.RequireAuth(store, http.HandlerFunc(authH.Me)))
-	mux.HandleFunc("POST /api/auth/recover", authH.Recover)
-	mux.Handle("POST /api/auth/password", auth.RequireAuth(store, http.HandlerFunc(authH.ChangePassword)))
-	mux.Handle("POST /api/auth/recovery-code", auth.RequireAuth(store, http.HandlerFunc(authH.RecoveryCode)))
 	mux.Handle("POST /api/auth/consent", auth.RequireAuth(store, http.HandlerFunc(authH.Consent)))
 	mux.Handle("PATCH /api/auth/profile", auth.RequireAuth(store, http.HandlerFunc(authH.UpdateProfile)))
 	mux.Handle("GET /api/auth/export", auth.RequireAuth(store, http.HandlerFunc(authH.Export)))
 	mux.Handle("POST /api/auth/delete", auth.RequireAuth(store, http.HandlerFunc(authH.DeleteAccount)))
+
+	// Funciones retiradas: Brightspace administra cuentas, contraseñas, cursos, clases, inscripciones y talleres.
+	for _, route := range []struct{ pattern, msg string }{
+		{"POST /api/auth/register", "El registro de cuentas ya no existe: se entra con Brightspace."},
+		{"POST /api/auth/login", "El ingreso con contraseña ya no existe: se entra con Brightspace."},
+		{"POST /api/auth/recover", "La recuperación de contraseña ya no existe: la contraseña es la de Brightspace."},
+		{"POST /api/auth/password", "El cambio de contraseña ya no existe: la contraseña es la de Brightspace."},
+		{"POST /api/auth/recovery-code", "Los códigos de recuperación ya no existen: la contraseña es la de Brightspace."},
+		{"POST /api/teacher/groups/{id}/students/{student}/reset-code", "Los códigos de restablecimiento ya no existen: la contraseña es la de Brightspace."},
+		{"POST /api/student/groups/join", "Los códigos de inscripción ya no existen: la inscripción viene de Brightspace."},
+		{"POST /api/teacher/groups/{id}/join-code", "Los códigos de inscripción ya no existen: la inscripción viene de Brightspace."},
+		{"POST /api/teacher/courses", "Las materias se administran en Brightspace."},
+		{"POST /api/teacher/courses/{id}/groups", "Las clases se administran en Brightspace."},
+		{"PATCH /api/teacher/courses/{id}", "Las materias se administran en Brightspace."},
+		{"DELETE /api/teacher/courses/{id}", "Las materias se administran en Brightspace."},
+		{"PATCH /api/teacher/groups/{id}", "Las clases se administran en Brightspace."},
+		{"DELETE /api/teacher/groups/{id}", "Las clases se administran en Brightspace."},
+		{"DELETE /api/teacher/groups/{id}/students/{student}", "Las inscripciones se administran en Brightspace; EduTrace conserva el historial."},
+		{"POST /api/teacher/courses/{id}/clone", "Para copiar un curso usa Brightspace."},
+		{"POST /api/teacher/courses/{id}/teachers", "Los docentes de la materia vienen de Brightspace."},
+		{"DELETE /api/teacher/courses/{id}/teachers/{teacher}", "Los docentes de la materia vienen de Brightspace."},
+		{"POST /api/teacher/groups/{id}/assignments", "Los talleres se crean como carpetas de entrega en Brightspace."},
+		{"DELETE /api/teacher/assignments/{id}", "Los talleres se eliminan en Brightspace."},
+	} {
+		mux.Handle(route.pattern, gone(route.msg))
+	}
 
 	notices := NewNotificationsHandler(store, mailOn)
 	mux.Handle("GET /api/notifications", auth.RequireAuth(store, http.HandlerFunc(notices.List)))
@@ -47,24 +72,11 @@ func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaCli
 	teacher := func(f http.HandlerFunc) http.Handler { return auth.RequireRole(store, auth.RoleTeacher, f) }
 	student := func(h http.Handler) http.Handler { return auth.RequireLearner(store, h) }
 	mux.Handle("GET /api/teacher/courses", teacher(classes.Courses))
-	mux.Handle("POST /api/teacher/courses", teacher(classes.CreateCourse))
-	mux.Handle("POST /api/teacher/courses/{id}/groups", teacher(classes.CreateGroup))
 	mux.Handle("GET /api/teacher/groups/{id}", teacher(classes.Group))
 	mux.Handle("GET /api/teacher/groups/{id}/submissions", teacher(classes.GroupSubmissions))
 	mux.Handle("GET /api/teacher/submissions/{id}", teacher(classes.Submission))
-	mux.Handle("POST /api/teacher/groups/{id}/assignments", teacher(classes.CreateAssignment))
 	mux.Handle("GET /api/teacher/groups/{id}/assignments", teacher(classes.GroupAssignments))
-	mux.Handle("PATCH /api/teacher/courses/{id}", teacher(classes.RenameCourse))
-	mux.Handle("DELETE /api/teacher/courses/{id}", teacher(classes.DeleteCourse))
-	mux.Handle("PATCH /api/teacher/groups/{id}", teacher(classes.RenameGroup))
-	mux.Handle("DELETE /api/teacher/groups/{id}", teacher(classes.DeleteGroup))
-	mux.Handle("POST /api/teacher/groups/{id}/join-code", teacher(classes.RegenerateJoinCode))
-	mux.Handle("DELETE /api/teacher/groups/{id}/students/{student}", teacher(classes.RemoveStudent))
-	mux.Handle("POST /api/teacher/groups/{id}/students/{student}/reset-code", teacher(classes.IssueResetCode))
 	mux.Handle("POST /api/teacher/courses/{id}/close", teacher(classes.CloseCourse))
-	mux.Handle("POST /api/teacher/courses/{id}/clone", teacher(classes.CloneCourse))
-	mux.Handle("POST /api/teacher/courses/{id}/teachers", teacher(classes.AddCoTeacher))
-	mux.Handle("DELETE /api/teacher/courses/{id}/teachers/{teacher}", teacher(classes.RemoveCoTeacher))
 	mux.Handle("GET /api/teacher/groups/{id}/alerts", teacher(classes.StudentAlerts))
 	mux.Handle("GET /api/teacher/groups/{id}/students/{student}/report", teacher(classes.StudentReport))
 	mux.Handle("GET /api/teacher/groups/{id}/similarity", teacher(classes.Similarity))
@@ -72,7 +84,6 @@ func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaCli
 	mux.Handle("POST /api/teacher/groups/{id}/monitors", teacher(classes.AddMonitor))
 	mux.Handle("DELETE /api/teacher/groups/{id}/monitors/{monitor}", teacher(classes.RemoveMonitor))
 	mux.Handle("PUT /api/teacher/assignments/{id}", teacher(classes.UpdateAssignment))
-	mux.Handle("DELETE /api/teacher/assignments/{id}", teacher(classes.DeleteAssignment))
 	mux.Handle("GET /api/teacher/courses/{id}/raes", teacher(classes.CourseRAEs))
 	mux.Handle("POST /api/teacher/courses/{id}/raes", teacher(classes.CreateRAE))
 	mux.Handle("PATCH /api/teacher/raes/{id}", teacher(classes.UpdateRAE))
@@ -122,7 +133,6 @@ func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaCli
 
 	// Clases y envios del estudiante
 	mux.Handle("GET /api/student/groups", student(http.HandlerFunc(classes.MyGroups)))
-	mux.Handle("POST /api/student/groups/join", student(http.HandlerFunc(classes.Join)))
 	mux.Handle("GET /api/student/submissions", student(http.HandlerFunc(classes.MySubmissions)))
 	mux.Handle("GET /api/student/submissions/{id}", student(http.HandlerFunc(classes.MySubmission)))
 	mux.Handle("GET /api/student/history", student(http.HandlerFunc(classes.MyHistory)))
@@ -166,7 +176,21 @@ func NewRouter(cfg *config.Config, comp *compiler.Compiler, ollama *ai.OllamaCli
 	handler = loggingMiddleware(handler)
 	handler = proxyMiddleware(handler, cfg.TrustProxy)
 
+	// Las rutas internas van aparte: sin corsMiddleware (no trae Origin) y con su propia autenticación.
+	if cfg.InternalAPIKey != "" {
+		root := http.NewServeMux()
+		root.Handle("/internal/", NewInternalHandler(store, cfg).Handler())
+		root.Handle("/", handler)
+		return root
+	}
 	return handler
+}
+
+// gone responde 410 a una función que ya no existe.
+func gone(msg string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusGone, map[string]string{"error": msg, "code": "funcion_retirada"})
+	})
 }
 
 func corsMiddleware(next http.Handler, allowedOrigins string) http.Handler {

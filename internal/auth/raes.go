@@ -256,7 +256,7 @@ func (s *Store) GroupRAEMatrix(teacherID, groupID string) (*RAEMatrix, error) {
 		JOIN users u ON u.id = gs.student_id
 		LEFT JOIN submissions s ON s.group_id = gs.group_id AND s.student_id = gs.student_id AND s.kind = 'official'
 		LEFT JOIN reviews v ON v.submission_id = s.id AND v.status = 'returned'
-		WHERE gs.group_id = ?
+		WHERE gs.group_id = ? AND gs.active = 1
 		GROUP BY u.id`, groupID)
 	if err != nil {
 		return nil, err

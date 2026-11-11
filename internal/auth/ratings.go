@@ -66,7 +66,7 @@ func (s *Store) RateInstant(studentID, kind, assignmentID, understood, comment s
 	}
 	_, err := s.db.Exec(`INSERT INTO feedback_ratings (at, kind, group_id, assignment_id, student_id, understood, comment)
 		SELECT ?, ?, a.group_id, a.id, ?, ?, ? FROM (SELECT 1) LEFT JOIN assignments a ON a.id = ?
-			AND EXISTS (SELECT 1 FROM group_students gs WHERE gs.group_id = a.group_id AND gs.student_id = ?)`,
+			AND EXISTS (SELECT 1 FROM group_students gs WHERE gs.group_id = a.group_id AND gs.student_id = ? AND gs.active = 1)`,
 		fmtTime(time.Now()), kind, studentID, understood, strings.TrimSpace(comment), assignmentID, studentID)
 	return err
 }

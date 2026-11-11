@@ -23,7 +23,7 @@ const ROLES = [
     title: "Si estás enseñando",
     surface: "bg-mint-50",
     items: [
-      "Organiza tus materias y clases, y publica talleres con sus archivos y casos de prueba.",
+      "Mira tus materias y clases de Brightspace, y completa tus talleres con archivos y casos de prueba.",
       "Revisa cada propuesta de la IA: la editas, la apruebas o la descartas.",
       "Identifica quién podría necesitar apoyo y cuándo acercarte a conversar.",
       "Consulta cómo va tu curso, clase por clase.",
@@ -42,7 +42,7 @@ const ROLES = [
 ];
 
 const STEPS = [
-  ["Únete a tu clase.", "Tu profesor te comparte un código de acceso y con él entras en un momento."],
+  ["Entra con Brightspace.", "Tus clases y tus talleres aparecen solos, tal como los tienes en Brightspace."],
   ["Escribe y compila.", "Programa en C++ sin instalar nada. Si tu programa pide datos, los escribes y ves cómo responde."],
   ["Aprende de tus errores.", "Cuando algo falla, te explicamos qué significa. Si aún no sabes cómo seguir, pide una pista: van de la más general a la más específica."],
   ["Recibe retroalimentación.", "Envía tu entrega y tu docente te devuelve sus comentarios y tu nota, para que sepas qué mejorar."],
@@ -215,7 +215,7 @@ export default function HomePage() {
         <section aria-labelledby="empieza" className="rise-in flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-lavender-100 p-5 shadow-soft sm:p-7">
           <div className="min-w-0 flex-1 basis-72">
             <h2 id="empieza" className="text-2xl font-extrabold tracking-tight">Tu próximo programa empieza aquí</h2>
-            <p className="mt-1 text-sm">Crea tu cuenta en un minuto y pídele a tu profesor el código para unirte a su clase.</p>
+            <p className="mt-1 text-sm">Entra con tu cuenta de Brightspace y tus clases aparecerán solas.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <HomeActions large />

@@ -40,7 +40,7 @@ func (s *Store) MonitorGroups(monitorID string) []MonitorGroup {
 
 func (s *Store) monitorGroups(monitorID string) ([]MonitorGroup, error) {
 	rows, err := s.db.Query(`SELECT g.id, g.name, c.name, t.name,
-			(SELECT COUNT(*) FROM group_students gs WHERE gs.group_id = g.id),
+			(SELECT COUNT(*) FROM group_students gs WHERE gs.group_id = g.id AND gs.active = 1),
 			(SELECT COUNT(*) FROM submissions s WHERE s.group_id = g.id AND s.kind = 'official')
 		FROM group_monitors gm
 		JOIN class_groups g ON g.id = gm.group_id

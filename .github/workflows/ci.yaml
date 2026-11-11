@@ -82,7 +82,8 @@ jobs:
     env:
       E2E_API: http://localhost:8080
       E2E_WEB: http://localhost:3000
-      E2E_TEACHER_CODE: codigo-de-ci
+      # Clave de prueba solo para el CI: el e2e siembra datos por /internal/v1 y abre sesión con tickets.
+      E2E_INTERNAL_API_KEY: ci-internal-key-0123456789abcdef0123456789abcdef
     steps:
       - name: Descargar el código
         uses: actions/checkout@v5
@@ -107,7 +108,7 @@ jobs:
           HOST: "::"
           PORT: "8080"
           DATA_DIR: ${{ runner.temp }}/datos
-          TEACHER_CODE: codigo-de-ci
+          INTERNAL_API_KEY: ci-internal-key-0123456789abcdef0123456789abcdef
           SANDBOX: none
           ALLOWED_ORIGINS: http://localhost:3000
           OLLAMA_BASE_URL: http://127.0.0.1:9

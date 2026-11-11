@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { joinGroup, StudentGroup } from "@/lib/api";
+import { StudentGroup } from "@/lib/api";
 
 const CLASS_COLORS = [
   { on: "bg-lavender-600 text-white", sub: "text-lavender-100", off: "bg-lavender-100 text-ink hover:bg-lavender-200" },
@@ -12,37 +11,16 @@ const CLASS_COLORS = [
   { on: "bg-amber-800 text-white", sub: "text-amber-100", off: "bg-amber-100 text-ink hover:bg-amber-200" },
 ];
 
-/** Clases del estudiante: elegir a cuál enviar y unirse con un código. */
+/** Clases del estudiante (vienen de Brightspace): elegir a cuál enviar. */
 export default function StudentClasses({
   groups,
   selectedId,
   onSelect,
-  onJoined,
 }: {
   groups: StudentGroup[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onJoined: (g: StudentGroup) => void;
 }) {
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const join = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const g = await joinGroup(code);
-      setCode("");
-      onJoined(g);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo unir a la clase");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="flex flex-wrap items-start justify-between gap-4 border-t border-lavender-100 pt-4">
       <div className="min-w-0 flex-1">
@@ -51,7 +29,7 @@ export default function StudentClasses({
         </p>
         {groups.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            Todavía no haces parte de ninguna clase. Pídele a tu profesor el código de acceso para unirte y poder compartir tu código con él.
+            Todavía no apareces inscrito en ninguna clase. Tus clases se gestionan en Brightspace.
           </p>
         ) : (
           <div role="radiogroup" aria-label="Clase a la que envías" className="flex flex-wrap gap-2">
@@ -83,30 +61,9 @@ export default function StudentClasses({
         )}
       </div>
 
-      <form onSubmit={join} className="w-full space-y-1 sm:w-auto">
-        <p className="mb-2 text-xs font-bold uppercase tracking-wider text-ink-faint">Unirme a una clase</p>
-        <div className="flex gap-2">
-          <input
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
-            placeholder="Código (p. ej. PQ54X8)"
-            maxLength={12}
-            aria-label="Código de la clase"
-            className="w-full min-w-0 rounded-full border border-lavender-100 bg-lavender-50/60 px-4 py-2 font-mono text-sm
-              tracking-widest placeholder:font-sans placeholder:tracking-normal placeholder-ink-faint
-              focus:border-lavender-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-lavender-100 sm:w-48"
-          />
-          <button
-            type="submit"
-            disabled={busy || code.trim().length < 4}
-            className="shrink-0 rounded-full bg-lavender-100 px-4 py-2 text-sm font-bold text-lavender-700 transition
-              hover:bg-lavender-200 disabled:opacity-40"
-          >
-            {busy ? "Uniendo..." : "Unirme"}
-          </button>
-        </div>
-        {error && <p className="px-2 text-xs font-semibold text-peach-700">{error}</p>}
-      </form>
+      <p className="w-full text-xs text-ink-faint sm:w-auto sm:max-w-[16rem]">
+        Tus clases se gestionan en Brightspace. Si falta alguna, inscríbete allá y vuelve a entrar.
+      </p>
     </div>
   );
 }

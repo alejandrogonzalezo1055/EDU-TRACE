@@ -6,7 +6,7 @@ Cuentas, cursos y clases de prueba para desarrollo local. **Solo para entornos l
 
 `data/` está en `.gitignore`, así que cada persona debe cargar los datos en su propia instancia:
 
-1. Levanta la aplicación con `./start.sh` (exporta `TEACHER_CODE=admin123` si no está definido).
+1. Levanta la aplicación con `./start.sh` (genera `INTERNAL_API_KEY` en `data/internal_api_key` si no está definida).
 2. Con el backend corriendo en `http://127.0.0.1:8080`, ejecuta:
 
    ```bash
@@ -17,7 +17,7 @@ El script registra al docente, crea los cursos y clases, registra e inscribe a l
 
 Para cargar en otro backend: `API=http://127.0.0.1:8092 ./scripts/seed_test_data.sh`.
 
-> El script registra al docente con el `TEACHER_CODE` de tu `.env` (o `admin123` si no hay), el mismo que usa `./start.sh`. Ejecútalo sobre una base limpia: si los correos ya existen, el registro devuelve error. Las credenciales quedan resumidas en `CREDENCIALES.txt` (en la raíz, fuera de git).
+> El script ya no registra cuentas ni usa contraseñas: sincroniza usuarios, inscripciones y carpetas de entrega por `/internal/v1` con `INTERNAL_API_KEY` (del entorno, de `.env` o de `data/internal_api_key`) y abre las sesiones con tickets de un solo uso. Es idempotente. Las credenciales quedan resumidas en `CREDENCIALES.txt` (en la raíz, fuera de git).
 
 ## Docente
 

@@ -45,6 +45,10 @@ type Review struct {
 	AIModel string `json:"ai_model,omitempty"`
 	AIPrompt string `json:"ai_prompt,omitempty"`
 	Criteria []ReviewCriterion `json:"criteria"`
+	// Publicación en Brightspace (d2l_*). Se omiten si el taller no está espejado o no hay Python.
+	BrightspacePublished *bool `json:"brightspace_published,omitempty"`
+	BrightspacePublishedAt *time.Time `json:"brightspace_published_at,omitempty"`
+	BrightspaceError string `json:"brightspace_error,omitempty"`
 }
 
 type AIDraft struct {
@@ -99,6 +103,7 @@ type StudentReview struct {
 	TeacherName string `json:"teacher_name,omitempty"`
 	Understood string `json:"understood,omitempty"`
 	Criteria []ReviewCriterion `json:"criteria,omitempty"`
+	BrightspacePublished *bool `json:"brightspace_published,omitempty"` // solo en talleres espejados de Brightspace
 }
 
 // ownedOfficial comprueba que la entrega existe, es oficial y es de una clase del profesor.
@@ -122,13 +127,14 @@ func loadReview(q querier, teacherID, submissionID string) (*Review, error) {
 	r := &Review{SubmissionID: submissionID, TeacherID: teacherID, Status: ReviewDraft}
 	var aiGrade, grade sql.NullFloat64
 	var aiMinutes sql.NullInt64
-	var aiAt, returnedAt, discarded sql.NullString
-	var updated string
+	var aiAt, returnedAt, discarded, d2lPublished sql.NullString
+	var updated, d2lStatus string
 	err := q.QueryRow(`SELECT teacher_id, ai_feedback, ai_grade, ai_reason, ai_confidence, ai_at,
-			feedback, grade, status, returned_at, updated_at, ai_discarded_at, feedback_origin, review_ms, ai_minutes, ai_model, ai_prompt
+			feedback, grade, status, returned_at, updated_at, ai_discarded_at, feedback_origin, review_ms, ai_minutes, ai_model, ai_prompt,
+			d2l_status, d2l_error, d2l_published_at
 		FROM reviews WHERE submission_id = ?`, submissionID).Scan(&r.TeacherID, &r.AIFeedback, &aiGrade,
 		&r.AIReason, &r.AIConfidence, &aiAt, &r.Feedback, &grade, &r.Status, &returnedAt, &updated,
-		&discarded, &r.Origin, &r.ReviewMs, &aiMinutes, &r.AIModel, &r.AIPrompt)
+		&discarded, &r.Origin, &r.ReviewMs, &aiMinutes, &r.AIModel, &r.AIPrompt, &d2lStatus, &r.BrightspaceError, &d2lPublished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, nil
 	}
@@ -137,6 +143,10 @@ func loadReview(q querier, teacherID, submissionID string) (*Review, error) {
 	}
 	r.AIGrade, r.AIAt, r.Grade, r.ReturnedAt = floatPtr(aiGrade), timePtr(aiAt), floatPtr(grade), timePtr(returnedAt)
 	r.UpdatedAt, r.AIDiscardedAt = parseTime(updated), timePtr(discarded)
+	if d2lStatus != "" {
+		published := d2lStatus == D2LSent
+		r.BrightspacePublished, r.BrightspacePublishedAt = &published, timePtr(d2lPublished)
+	}
 	if aiMinutes.Valid {
 		m := int(aiMinutes.Int64)
 		r.AIMinutes = &m
@@ -343,6 +353,12 @@ func (s *Store) SaveTeacherReview(teacherID, submissionID, feedback string, grad
 		}
 		detail += " · " + originText(r.Origin)
 		changed := before.Feedback != r.Feedback || gradeText(before.Grade) != gradeText(r.Grade)
+		// Devolver (o re-editar una revisión ya devuelta) publica en Brightspace, reemplazando lo anterior.
+		if r.Status == ReviewReturned && (returnIt || changed) {
+			if err := s.queueReviewForD2L(q, teacherID, r); err != nil {
+				return err
+			}
+		}
 		if action == AuditDraftSaved && !changed {
 			return nil
 		}

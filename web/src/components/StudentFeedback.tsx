@@ -1,10 +1,28 @@
 "use client";
 
-import { FeedbackOrigin, StudentSubmission } from "@/lib/api";
+import { BrightspaceStatus, FeedbackOrigin, StudentSubmission, SubmissionMeta } from "@/lib/api";
 import { MonitorNotes } from "@/components/MonitorFeedback";
 import ComprehensionCheck from "@/components/ComprehensionCheck";
 import { StudentQuestions } from "@/components/FeedbackQuestions";
 import { formatDateTime, formatFeedback, LEVEL_STYLE, performanceBand } from "@/lib/format";
+
+const BRIGHTSPACE_PILL: Record<BrightspaceStatus, { label: string; style: string }> = {
+  pendiente: { label: "Enviando a Brightspace", style: "bg-amber-50 text-amber-800" },
+  enviada: { label: "Enviada a Brightspace", style: "bg-mint-100 text-mint-700" },
+  fallida: { label: "No se pudo enviar a Brightspace", style: "bg-peach-50 text-peach-700" },
+};
+
+/** Estado del envío oficial a Brightspace; no pinta nada si el backend aún no manda el campo. */
+export function BrightspacePill({ meta }: { meta: Pick<SubmissionMeta, "kind" | "brightspace_status" | "brightspace_error"> }) {
+  const st = meta.brightspace_status;
+  if (!st || !BRIGHTSPACE_PILL[st]) return null;
+  const { label, style } = BRIGHTSPACE_PILL[st];
+  return (
+    <span title={st === "fallida" ? meta.brightspace_error : undefined} className={`rounded-full px-3 py-1 text-xs font-bold ${style}`}>
+      {label}
+    </span>
+  );
+}
 
 export function ReviewStatusPill({ item }: { item: StudentSubmission }) {
   return item.review ? (
@@ -49,9 +67,23 @@ export function SubmissionFeedback({ item }: { item: StudentSubmission }) {
   const teacher = review?.teacher_name || "tu profesor";
   return (
     <div className="space-y-3">
+      {item.brightspace_status === "fallida" && (
+        <p role="status" className="rounded-2xl bg-peach-50 px-4 py-2 text-sm font-semibold text-peach-700">
+          Tu entrega quedó guardada en EduTrace, pero no llegó a Brightspace{item.brightspace_error ? `: ${item.brightspace_error}` : ""}. Si el
+          problema continúa, vuelve a entrar con Brightspace y envíala de nuevo.
+        </p>
+      )}
+      {item.brightspace_status === "pendiente" && (
+        <p role="status" className="rounded-2xl bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900">
+          Tu entrega está guardada y se está enviando a Brightspace. EduTrace lo reintentará solo.
+        </p>
+      )}
       {review ? (
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
+            {review.brightspace_published && (
+              <span className="rounded-full bg-mint-100 px-2.5 py-0.5 text-[11px] font-bold text-mint-700">Publicada en Brightspace</span>
+            )}
             {origin !== "docente" ? (
               <span className="rounded-full bg-lavender-100 px-2.5 py-0.5 text-[11px] font-bold text-lavender-700">
                 Generado con IA y aprobado por {teacher}

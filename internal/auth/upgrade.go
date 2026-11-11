@@ -45,6 +45,47 @@ var addedColumns = []struct{ table, column, ddl string }{
 	{"reviews", "ai_prompt", `ALTER TABLE reviews ADD COLUMN ai_prompt TEXT NOT NULL DEFAULT ''`},
 	{"ai_requests", "model", `ALTER TABLE ai_requests ADD COLUMN model TEXT NOT NULL DEFAULT ''`},
 	{"ai_requests", "prompt_version", `ALTER TABLE ai_requests ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''`},
+
+	// Integración con Brightspace (Python → Go). Los ID externos llevan índice único en externalIndexes.
+	{"users", "external_id", `ALTER TABLE users ADD COLUMN external_id TEXT`},
+	{"courses", "external_id", `ALTER TABLE courses ADD COLUMN external_id TEXT`},
+	{"courses", "starts_at", `ALTER TABLE courses ADD COLUMN starts_at TEXT`},
+	{"courses", "ends_at", `ALTER TABLE courses ADD COLUMN ends_at TEXT`},
+	{"courses", "external_active", `ALTER TABLE courses ADD COLUMN external_active INTEGER NOT NULL DEFAULT 1`},
+	{"class_groups", "external_id", `ALTER TABLE class_groups ADD COLUMN external_id TEXT`},
+	{"group_students", "active", `ALTER TABLE group_students ADD COLUMN active INTEGER NOT NULL DEFAULT 1`},
+	{"group_students", "ended_at", `ALTER TABLE group_students ADD COLUMN ended_at TEXT`},
+	{"course_teachers", "active", `ALTER TABLE course_teachers ADD COLUMN active INTEGER NOT NULL DEFAULT 1`},
+	{"course_teachers", "ended_at", `ALTER TABLE course_teachers ADD COLUMN ended_at TEXT`},
+	{"assignments", "external_id", `ALTER TABLE assignments ADD COLUMN external_id TEXT`},
+	{"assignments", "score_denominator", `ALTER TABLE assignments ADD COLUMN score_denominator REAL`},
+	{"assignments", "grade_item_id", `ALTER TABLE assignments ADD COLUMN grade_item_id TEXT`},
+	{"assignments", "is_hidden", `ALTER TABLE assignments ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0`},
+	{"submissions", "external_id", `ALTER TABLE submissions ADD COLUMN external_id TEXT`},
+	{"submissions", "d2l_status", `ALTER TABLE submissions ADD COLUMN d2l_status TEXT NOT NULL DEFAULT '' CHECK (d2l_status IN ('', 'pendiente', 'enviada', 'fallida'))`},
+	{"submissions", "d2l_attempts", `ALTER TABLE submissions ADD COLUMN d2l_attempts INTEGER NOT NULL DEFAULT 0`},
+	{"submissions", "d2l_next_retry_at", `ALTER TABLE submissions ADD COLUMN d2l_next_retry_at TEXT`},
+	{"submissions", "d2l_error", `ALTER TABLE submissions ADD COLUMN d2l_error TEXT NOT NULL DEFAULT ''`},
+	{"submissions", "d2l_sent_at", `ALTER TABLE submissions ADD COLUMN d2l_sent_at TEXT`},
+	{"reviews", "d2l_status", `ALTER TABLE reviews ADD COLUMN d2l_status TEXT NOT NULL DEFAULT '' CHECK (d2l_status IN ('', 'pendiente', 'enviada', 'fallida'))`},
+	{"reviews", "d2l_attempts", `ALTER TABLE reviews ADD COLUMN d2l_attempts INTEGER NOT NULL DEFAULT 0`},
+	{"reviews", "d2l_next_retry_at", `ALTER TABLE reviews ADD COLUMN d2l_next_retry_at TEXT`},
+	{"reviews", "d2l_error", `ALTER TABLE reviews ADD COLUMN d2l_error TEXT NOT NULL DEFAULT ''`},
+	{"reviews", "d2l_published_at", `ALTER TABLE reviews ADD COLUMN d2l_published_at TEXT`},
+	{"reviews", "d2l_teacher_id", `ALTER TABLE reviews ADD COLUMN d2l_teacher_id TEXT NOT NULL DEFAULT ''`},
+}
+
+// Índices únicos parciales: las filas locales (sin ID externo) no entran. Van aquí y no en schema.sql
+// porque en una base existente las columnas se agregan después de ejecutar el esquema.
+var externalIndexes = []string{
+	`CREATE UNIQUE INDEX IF NOT EXISTS users_external_id ON users(external_id) WHERE external_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS courses_external_id ON courses(external_id) WHERE external_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS class_groups_external_id ON class_groups(external_id) WHERE external_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS assignments_external_id ON assignments(external_id) WHERE external_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS submissions_external_id ON submissions(external_id) WHERE external_id IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS submissions_d2l_pending ON submissions(d2l_status, d2l_next_retry_at) WHERE d2l_status IN ('pendiente', 'fallida')`,
+	`CREATE INDEX IF NOT EXISTS reviews_d2l_pending ON reviews(d2l_status, d2l_next_retry_at) WHERE d2l_status IN ('pendiente', 'fallida')`,
+	`CREATE INDEX IF NOT EXISTS session_tickets_expires ON session_tickets(expires_at)`,
 }
 
 func (s *Store) upgradeSchema() error {
@@ -61,6 +102,14 @@ func (s *Store) upgradeSchema() error {
 				return fmt.Errorf("columna %s.%s: %w", c.table, c.column, err)
 			}
 		}
+	}
+	for _, ddl := range externalIndexes {
+		if _, err := s.db.Exec(ddl); err != nil {
+			return fmt.Errorf("índice externo: %w", err)
+		}
+	}
+	if err := s.upgradeCourseStaffView(); err != nil {
+		return err
 	}
 	if _, err := s.db.Exec(`INSERT INTO ai_jobs (submission_id, status, enqueued_at)
 		SELECT s.id, 'pendiente', s.created_at FROM submissions s
@@ -114,6 +163,34 @@ func (s *Store) upgradeUsersRole() error {
 	rows.Close()
 	if broken {
 		return errors.New("tabla users: referencias rotas")
+	}
+	return tx.Commit()
+}
+
+// upgradeCourseStaffView recrea la vista course_staff en bases creadas antes de las inscripciones
+// activas/inactivas: la definición vieja no mira course_teachers.active ni courses.external_id.
+func (s *Store) upgradeCourseStaffView() error {
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'course_staff'`).Scan(&ddl); err != nil {
+		return err
+	}
+	if strings.Contains(ddl, "active = 1") {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`DROP VIEW course_staff`,
+		`CREATE VIEW course_staff AS
+			SELECT id AS course_id, teacher_id FROM courses WHERE external_id IS NULL
+			UNION SELECT course_id, teacher_id FROM course_teachers WHERE active = 1`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("vista course_staff: %w", err)
+		}
 	}
 	return tx.Commit()
 }

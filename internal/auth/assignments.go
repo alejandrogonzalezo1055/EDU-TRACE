@@ -188,7 +188,7 @@ func (s *Store) GroupAssignments(teacherID, groupID string) ([]Assignment, error
 
 func (s *Store) groupAssignments(groupID string, full bool) ([]Assignment, error) {
 	rows, err := s.db.Query(`SELECT `+assignmentCols+` FROM assignments a
-		WHERE a.group_id = ? ORDER BY a.created_at DESC`, groupID)
+		WHERE a.group_id = ? AND a.is_hidden = 0 ORDER BY a.created_at DESC`, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (s *Store) studentAssignments(studentID string) ([]StudentAssignment, error
 		JOIN group_students gs ON gs.group_id = a.group_id
 		JOIN class_groups g ON g.id = a.group_id
 		JOIN courses c ON c.id = g.course_id
-		WHERE gs.student_id = ? ORDER BY a.created_at DESC`, studentID)
+		WHERE gs.student_id = ? AND gs.active = 1 AND a.is_hidden = 0 ORDER BY a.created_at DESC`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +282,7 @@ func (s *Store) visibleAssignment(u *User, assignmentID string) (title, statemen
 		WHERE a.id = ? AND (
 			(? = 'teacher' AND c.id IN (SELECT course_id FROM course_staff WHERE teacher_id = ?)) OR
 			(? IN ('student', 'monitor') AND EXISTS (SELECT 1 FROM group_students gs
-				WHERE gs.group_id = a.group_id AND gs.student_id = ?)) OR
+				WHERE gs.group_id = a.group_id AND gs.student_id = ? AND gs.active = 1)) OR
 			(? = 'monitor' AND EXISTS (SELECT 1 FROM group_monitors gm
 				WHERE gm.group_id = a.group_id AND gm.monitor_id = ?))
 		)`, assignmentID, u.Role, u.ID, u.Role, u.ID, u.Role, u.ID).Scan(&title, &statement, &rubric)

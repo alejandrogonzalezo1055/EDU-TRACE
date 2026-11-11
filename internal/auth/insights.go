@@ -50,7 +50,7 @@ func (s *Store) groupFacts(groupID string, since time.Time) (map[string]*student
 	facts := map[string]*studentFacts{}
 	names := map[string]string{}
 	rows, err := s.db.Query(`SELECT u.id, u.name, gs.joined_at FROM group_students gs JOIN users u ON u.id = gs.student_id
-		WHERE gs.group_id = ? ORDER BY u.name`, groupID)
+		WHERE gs.group_id = ? AND gs.active = 1 ORDER BY u.name`, groupID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -266,7 +266,7 @@ func (s *Store) StudentReport(teacherID, groupID, studentID string, now time.Tim
 	}
 	rep := &StudentReport{CourseName: g.CourseName, GroupName: g.Name, GeneratedAt: now.UTC(), Assignments: []ReportAssignment{}, RAEs: []ReportRAE{}, Alerts: []string{}}
 	err = s.db.QueryRow(`SELECT u.name, u.email FROM group_students gs JOIN users u ON u.id = gs.student_id
-		WHERE gs.group_id = ? AND gs.student_id = ?`, groupID, studentID).Scan(&rep.Name, &rep.Email)
+		WHERE gs.group_id = ? AND gs.student_id = ? AND gs.active = 1`, groupID, studentID).Scan(&rep.Name, &rep.Email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

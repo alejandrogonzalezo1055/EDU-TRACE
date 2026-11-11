@@ -5,7 +5,6 @@ import { useAuth } from "@/components/AuthProvider";
 import { homeFor } from "@/lib/role";
 
 const PRIMARY = "rounded-full bg-lavender-600 font-bold text-white shadow-soft transition hover:bg-lavender-700";
-const SECONDARY = "rounded-full bg-white font-bold text-lavender-700 shadow-soft transition hover:bg-lavender-50";
 
 export default function HomeActions({ large = false }: { large?: boolean }) {
   const { user } = useAuth();
@@ -18,13 +17,8 @@ export default function HomeActions({ large = false }: { large?: boolean }) {
     );
   }
   return (
-    <>
-      <Link href="/login?modo=registro" className={`${PRIMARY} ${size}`}>
-        Crear mi cuenta
-      </Link>
-      <Link href="/login" className={`${SECONDARY} ${size}`}>
-        Ya tengo cuenta
-      </Link>
-    </>
+    <Link href="/login" className={`${PRIMARY} ${size}`}>
+      Entrar con Brightspace
+    </Link>
   );
 }

@@ -1,6 +1,6 @@
 import { Role } from "@/lib/api";
 
-// Último rol elegido para entrar (lo recuerda el login y lo fija "Cambiar de rol").
+// Último rol elegido para entrar (lo fija "Cambiar de rol"; el rol real lo decide el backend).
 const ROLE_KEY = "edutrace_role";
 
 export function isRole(value: string | null): value is Role {

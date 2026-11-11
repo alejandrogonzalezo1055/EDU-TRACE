@@ -91,7 +91,7 @@ cp .env.example .env
 ./start.sh
 ```
 
-En `.env`, define `TEACHER_CODE`: es el código para crear cuentas de profesor.
+En `.env`, define `INTERNAL_API_KEY` (≥32 bytes): es la clave con la que el servicio Python sincroniza usuarios, inscripciones y talleres. Ya no hay registro ni código de profesor: se entra con Brightspace.
 
 `start.sh`:
 - verifica las dependencias;
@@ -115,7 +115,8 @@ Las cuentas y el detalle están en [docs/TEST_DATA.md](docs/TEST_DATA.md).
 | `PORT` / `HOST` | `8080` / `127.0.0.1` | Dirección del backend |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Orígenes del frontend permitidos (CORS) |
 | `DATA_DIR` | `data` | Base SQLite y adjuntos (fuera de git) |
-| `TEACHER_CODE` | vacío | Código para registrar profesores; vacío = deshabilitado |
+| `INTERNAL_API_KEY` | vacío | Clave Python → Go de `/internal/v1/*` (≥32 bytes); vacío = deshabilitado |
+| `PYTHON_BASE_URL`, `PYTHON_API_KEY`, `PYTHON_CA_FILE`, `PYTHON_ALLOW_HTTP`, `COOKIE_JAR_KEY`, `PYTHON_COOKIE_NAMES`, `D2L_ROLE_MAP`, `ROSTER_MAX_DEACTIVATE_PERCENT`, `TLS_CERT_FILE`, `TLS_KEY_FILE` | ver `.env.example` | Integración con Brightspace (ver `docs/INTEGRACION_PYTHON.md`) y HTTPS propio de Go |
 | `COOKIE_SECURE` | `false` | `true` en producción con HTTPS |
 | `SANDBOX` | `bwrap` | `none` solo para desarrollo |
 | `COMPILE_TIMEOUT_SECS` / `RUN_TIMEOUT_SECS` | `10` / `5` | Límites de compilación y ejecución |

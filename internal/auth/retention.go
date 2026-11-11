@@ -88,7 +88,7 @@ func (s *Store) CloseCourse(teacherID, courseID string) (*time.Time, error) {
 		}
 	}
 	students, err := queryIDs(tx, `SELECT DISTINCT gs.student_id FROM group_students gs
-		JOIN class_groups g ON g.id = gs.group_id WHERE g.course_id = ?`, courseID)
+		JOIN class_groups g ON g.id = gs.group_id WHERE g.course_id = ? AND gs.active = 1`, courseID)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func (s *Store) Purge(now time.Time) (PurgeReport, error) {
 	}
 	accounts, err := queryIDs(s.db, `SELECT u.id FROM users u
 		WHERE u.role IN ('student', 'monitor') AND COALESCE(u.last_active_at, u.created_at) <= ?
-			AND NOT EXISTS (SELECT 1 FROM group_students gs WHERE gs.student_id = u.id)
+			AND NOT EXISTS (SELECT 1 FROM group_students gs WHERE gs.student_id = u.id) -- activas o no: una inscripción terminada conserva el historial
 			AND NOT EXISTS (SELECT 1 FROM group_monitors gm WHERE gm.monitor_id = u.id)`, cutoff)
 	if err != nil {
 		return r, err

@@ -4,43 +4,35 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import RequireAuth from "@/components/RequireAuth";
 import AppShell from "@/components/AppShell";
-import { Avatar, Card, InlineCreate, RenameForm, SmallButton } from "@/components/ui";
+import { Avatar, Card, SmallButton } from "@/components/ui";
 import RaeEditor from "@/components/RaeEditor";
 import { useAuth } from "@/components/AuthProvider";
 import {
-  addCoTeacher,
   AIStatus,
-  cloneCourse,
   closeCourse,
-  removeCoTeacher,
-  createCourse,
-  createGroup,
   CourseSummary,
-  deleteCourse,
   getAIStatus,
   listCourses,
   listOpenQuestions,
   OpenQuestion,
-  renameCourse,
   reopenCourse,
 } from "@/lib/api";
 import { formatDateTime, relativeTime } from "@/lib/format";
 
 const HOW_IT_WORKS: [string, string][] = [
-  ["Crea una materia y organiza tus clases.", "Puedes agregar los diferentes grupos que tendrás a cargo."],
-  ["Invita a tus estudiantes.", "Comparte el código de acceso de cada clase para que puedan unirse."],
-  ["Prepara los talleres.", "Dentro de cada clase puedes publicar ejercicios con sus enunciados, archivos de apoyo y casos de prueba."],
+  ["Tus materias y clases vienen de Brightspace.", "Aparecen aquí solas con sus estudiantes y talleres; se crean y se editan allá."],
+  ["Prepara los talleres.", "Los talleres son carpetas de entrega de Brightspace. Aquí completas sus casos de prueba, criterios, archivos de apoyo y rúbrica."],
   [
     "Tus estudiantes practican y envían sus soluciones.",
-    "Pueden compilar su código, comprobar qué casos de prueba superan y enviar sus entregas. Cada entrega pasa automáticamente a la cola de revisión de la IA.",
+    "Pueden compilar su código, comprobar qué casos de prueba superan y enviar sus entregas. La entrega oficial también se envía a Brightspace y cada una pasa a la cola de revisión de la IA.",
   ],
   [
     "Revisa la retroalimentación generada por la IA.",
     "Puedes consultar cada propuesta, editarla, aprobarla o descartarla. Si utilizas el modo supervisado, tus estudiantes solo recibirán la retroalimentación que hayas aprobado.",
   ],
   [
-    "Administra tu clase desde un solo lugar.",
-    "Puedes cambiar su nombre o código de acceso, gestionar los estudiantes, editar los talleres y agregar monitores para que acompañen el aprendizaje y den retroalimentación, sin asignar calificaciones.",
+    "Devuelve la revisión.",
+    "Al devolverla, la nota y el texto se publican también en Brightspace. Puedes agregar monitores para que acompañen el aprendizaje y den retroalimentación, sin asignar calificaciones.",
   ],
 ];
 
@@ -104,121 +96,31 @@ function AIAlert() {
   );
 }
 
-function CourseTeachers({ course, onChanged }: { course: CourseSummary; onChanged: () => Promise<void> }) {
-  const { user } = useAuth();
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = async (action: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await action();
-      await onChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo cambiar los profesores");
-    } finally {
-      setBusy(false);
-    }
-  };
-
+function CourseTeachers({ course }: { course: CourseSummary }) {
   return (
     <div className="mb-4 rounded-2xl bg-lavender-50/60 px-4 py-3 text-sm">
       <p className="mb-1.5 text-xs font-bold uppercase tracking-wider text-ink-soft">Profesores</p>
       <ul className="flex flex-wrap gap-1.5">
         {(course.teachers ?? []).map((t) => (
-          <li key={t.id} className="flex items-center gap-1 rounded-full bg-white py-0.5 pl-3 pr-1 ring-1 ring-lavender-100">
+          <li key={t.id} className="rounded-full bg-white px-3 py-0.5 ring-1 ring-lavender-100">
             <span className="font-semibold">{t.name}</span>
-            {t.owner && <span className="text-xs text-ink-soft">(dueño)</span>}
-            {!t.owner && (course.owner || t.id === user?.id) && (
-              <SmallButton
-                tone="danger"
-                disabled={busy}
-                onClick={() => {
-                  const self = t.id === user?.id;
-                  if (!window.confirm(self ? `¿Salir de «${course.name}»? Tus revisiones pasan al dueño de la materia.` : `¿Retirar a ${t.name} de «${course.name}»?`)) return;
-                  run(() => removeCoTeacher(course.id, t.id));
-                }}
-              >
-                {t.id === user?.id ? "Salir" : "Quitar"}
-              </SmallButton>
-            )}
+            {t.owner && <span className="ml-1 text-xs text-ink-soft">(dueño)</span>}
           </li>
         ))}
       </ul>
-      {course.owner && (
-        <form
-          className="mt-2 flex flex-wrap gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            run(async () => {
-              await addCoTeacher(course.id, email.trim());
-              setEmail("");
-            });
-          }}
-        >
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email de otro profesor"
-            aria-label="Email del profesor que compartirá la materia"
-            className="min-w-0 flex-1 rounded-full border border-lavender-100 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-4 focus:ring-lavender-100"
-          />
-          <button
-            type="submit"
-            disabled={busy || !email.trim()}
-            className="rounded-full bg-white px-4 py-1.5 text-sm font-bold text-lavender-700 ring-1 ring-lavender-200 hover:bg-lavender-50 disabled:opacity-50"
-          >
-            Compartir materia
-          </button>
-        </form>
-      )}
-      {error && <p className="mt-2 rounded-2xl bg-peach-50 px-3 py-1.5 text-sm font-semibold text-peach-700">{error}</p>}
+      <p className="mt-2 text-xs text-ink-faint">Se gestiona en Brightspace.</p>
     </div>
   );
 }
 
 function CourseCard({ course, onChanged }: { course: CourseSummary; onChanged: () => Promise<void> }) {
   const students = course.groups.reduce((n, g) => n + g.student_count, 0);
-  const [renaming, setRenaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const remove = async () => {
-    const n = course.groups.length;
-    const detail = n > 0 ? ` Se borrarán sus ${n} ${n === 1 ? "clase" : "clases"} con todos sus talleres, entregas y revisiones.` : "";
-    if (!window.confirm(`¿Eliminar la materia «${course.name}»?${detail} No se puede deshacer.`)) return;
-    setError(null);
-    try {
-      await deleteCourse(course.id);
-      await onChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo eliminar la materia");
-    }
-  };
-
-  const copy = async () => {
-    const name = window.prompt(
-      `Escribe un nombre para la copia de «${course.name}».\n\nSe copiarán las clases (sin estudiantes y con nuevos códigos de acceso), los talleres con sus respectivos archivos, casos de prueba y rúbricas, los RAE y los profesores.\n\nLas fechas límite no se copiarán, así que podrás configurarlas nuevamente en la nueva versión.`,
-      `${course.name} (copia)`
-    );
-    if (name === null) return;
-    const closeOld = !course.closed_at && window.confirm(`¿Cerrar también el periodo de «${course.name}»?`);
-    setError(null);
-    try {
-      await cloneCourse(course.id, name.trim(), closeOld);
-      await onChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo copiar la materia");
-    }
-  };
 
   const togglePeriod = async () => {
     const question = course.closed_at
       ? `¿Reabrir el periodo de «${course.name}»? Los estudiantes podrán volver a enviar y los datos ya no se borrarán.`
-      : `¿Quieres cerrar el periodo de «${course.name}»?\n\nAl cerrar el periodo, los estudiantes ya no podrán unirse a las clases ni enviar nuevas entregas. También recibirán una notificación con la fecha en la que se eliminarán sus entregas.\n\nPor tu parte, podrás seguir revisando y exportando las entregas existentes hasta esa fecha.`;
+      : `¿Quieres cerrar el periodo de «${course.name}»?\n\nAl cerrar el periodo, los estudiantes ya no podrán enviar nuevas entregas. También recibirán una notificación con la fecha en la que se eliminarán sus entregas.\n\nPor tu parte, podrás seguir revisando y exportando las entregas existentes hasta esa fecha.`;
     if (!window.confirm(question)) return;
     setError(null);
     try {
@@ -240,30 +142,10 @@ function CourseCard({ course, onChanged }: { course: CourseSummary; onChanged: (
             {course.groups.length} {course.groups.length === 1 ? "clase" : "clases"}, {students}{" "}
             {students === 1 ? "estudiante" : "estudiantes"}
           </span>
-          <SmallButton onClick={() => setRenaming(true)}>Renombrar</SmallButton>
-          <SmallButton onClick={copy}>Copiar para otro periodo</SmallButton>
           <SmallButton onClick={togglePeriod}>{course.closed_at ? "Reabrir periodo" : "Cerrar periodo"}</SmallButton>
-          {course.owner && (
-            <SmallButton tone="danger" onClick={remove}>
-              Eliminar
-            </SmallButton>
-          )}
         </span>
       }
     >
-      {renaming && (
-        <div className="mb-4 flex">
-          <RenameForm
-            initial={course.name}
-            onCancel={() => setRenaming(false)}
-            onSave={async (name) => {
-              await renameCourse(course.id, name);
-              setRenaming(false);
-              await onChanged();
-            }}
-          />
-        </div>
-      )}
       {error && <p className="mb-3 rounded-2xl bg-peach-50 px-4 py-2 text-sm font-semibold text-peach-700">{error}</p>}
       {course.closed_at && (
         <p className="mb-3 rounded-2xl bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900">
@@ -271,11 +153,11 @@ function CourseCard({ course, onChanged }: { course: CourseSummary; onChanged: (
           {course.purge_at ? `Sus datos se borrarán el ${formatDateTime(course.purge_at)}.` : "Sus datos no se borran automáticamente."}
         </p>
       )}
-      <CourseTeachers course={course} onChanged={onChanged} />
+      <CourseTeachers course={course} />
       <RaeEditor courseId={course.id} raes={course.raes ?? []} onChanged={onChanged} />
       {course.groups.length === 0 ? (
         <p className="mb-3 text-sm text-ink-soft">
-          Esta materia aún no tiene clases. Crea una y comparte su código con tus estudiantes.
+          Esta materia aún no tiene clases. Se gestionan en Brightspace.
         </p>
       ) : (
         <ul className="mb-4 space-y-2">
@@ -287,9 +169,6 @@ function CourseCard({ course, onChanged }: { course: CourseSummary; onChanged: (
                   hover:bg-lavender-100"
               >
                 <span className="min-w-[7rem] flex-1 font-bold">{g.name}</span>
-                <span className="rounded-full bg-white px-2.5 py-0.5 font-mono text-xs font-bold tracking-widest text-lavender-700">
-                  {g.join_code}
-                </span>
                 <span className="text-xs font-semibold text-ink-soft">
                   {g.student_count} {g.student_count === 1 ? "estudiante" : "estudiantes"}, {g.submission_count}{" "}
                   {g.submission_count === 1 ? "entrega" : "entregas"}
@@ -302,14 +181,7 @@ function CourseCard({ course, onChanged }: { course: CourseSummary; onChanged: (
           ))}
         </ul>
       )}
-      <InlineCreate
-        placeholder="Nueva clase (p. ej. Clase 1100)"
-        button="Agregar clase"
-        onCreate={async (name) => {
-          await createGroup(course.id, name);
-          await onChanged();
-        }}
-      />
+      <p className="text-xs text-ink-faint">Las materias y las clases se gestionan en Brightspace.</p>
     </Card>
   );
 }
@@ -343,7 +215,7 @@ function CoursesDashboard() {
           <div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">¡Hola, {firstName}!</h1>
             <p className="text-ink-soft text-sm mt-0.5">
-              Organiza tus materias y clases. EduTrace te muestra quién necesita acompañamiento; tú decides.
+              Consulta tus materias y clases de Brightspace. EduTrace te muestra quién necesita acompañamiento; tú decides.
             </p>
           </div>
         </div>
@@ -361,8 +233,7 @@ function CoursesDashboard() {
             <Card>
               <p className="font-bold">Aún no tienes materias</p>
               <p className="mt-1 text-sm text-ink-soft">
-                Crea tu primera materia en el panel de la derecha. Luego agrégale una o varias clases y comparte
-                el código de cada clase con tus estudiantes para que se unan y te envíen su código.
+                Tus materias vienen de Brightspace. Si acabas de ser asignado a una, vuelve a entrar para actualizarlas.
               </p>
             </Card>
           ) : (
@@ -372,17 +243,6 @@ function CoursesDashboard() {
 
         <div className="space-y-5">
           <QuestionsInbox />
-          <Card title="Nueva materia" className="rise-in" surface="bg-mint-50">
-            <InlineCreate
-              placeholder="Nombre de la materia"
-              button="Crear"
-              onCreate={async (name) => {
-                await createCourse(name);
-                await reload();
-              }}
-            />
-            <p className="mt-2 px-1 text-xs text-ink-soft">Por ejemplo: Introducción a la programación</p>
-          </Card>
           <Card title="¿Cómo funciona EduTrace?" className="rise-in" surface="bg-peach-50">
             <ol className="list-decimal space-y-2 pl-5 text-sm text-ink-soft">
               {HOW_IT_WORKS.map(([lead, text]) => (

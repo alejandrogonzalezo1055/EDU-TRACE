@@ -401,7 +401,14 @@ function CompilerPage() {
         ok: true,
         text:
           `Enviado a ${group.course_name}, ${group.name}${assignment ? ` (${assignment.title})` : ""}. ` +
-          `Tu profesor ya puede verlo${extras.length ? ` junto con ${extras.join(" y ")}` : ""}.${tests}${next}`,
+          `Tu profesor ya puede verlo${extras.length ? ` junto con ${extras.join(" y ")}` : ""}.${tests}${next}` +
+          (sent.brightspace_status === "pendiente"
+            ? " Se está enviando a Brightspace."
+            : sent.brightspace_status === "enviada"
+              ? " También quedó entregada en Brightspace."
+              : sent.brightspace_status === "fallida"
+                ? ` No pudimos entregarla en Brightspace${sent.brightspace_error ? ` (${sent.brightspace_error})` : ""}; quedó guardada aquí.`
+                : ""),
       });
     } catch (err) {
       if (err instanceof UnauthorizedError) setUser(null);
@@ -477,11 +484,6 @@ function CompilerPage() {
               groups={openGroups}
               selectedId={groupId}
               onSelect={setGroupId}
-              onJoined={(g) => {
-                setGroups((gs) => (gs.some((x) => x.id === g.id) ? gs : [...gs, g]));
-                setGroupId(g.id);
-                loadAssignments();
-              }}
             />
             {sendStatus && (
               <p

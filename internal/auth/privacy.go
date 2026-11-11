@@ -9,6 +9,8 @@ import (
 
 const PrivacyVersion = "2026-11"
 
+var ErrNoLocalPassword = errors.New("esta cuenta entra con Brightspace y no tiene contraseña en EduTrace, así que no puede confirmar el borrado con una; pide la eliminación de tus datos a la institución")
+
 var ErrOwnsCourses = errors.New("primero elimina tus materias y sal de las que compartes con otros profesores: al borrar la cuenta se borrarían las entregas de tus estudiantes")
 
 func (s *Store) RecordConsent(userID string) (time.Time, error) {
@@ -37,6 +39,9 @@ func (s *Store) DeleteAccount(userID, password string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if hash == "" {
+		return ErrNoLocalPassword
 	}
 	if !CheckPassword(password, hash) {
 		return ErrInvalidCredentials
@@ -124,7 +129,7 @@ func (s *Store) ExportData(u *User) (*DataExport, error) {
 	out.Profile.CreatedAt, out.Profile.ConsentAt = parseTime(created), timePtr(consent)
 
 	rows, err := s.db.Query(`SELECT c.name, g.name, 'estudiante' FROM group_students gs
-			JOIN class_groups g ON g.id = gs.group_id JOIN courses c ON c.id = g.course_id WHERE gs.student_id = ?
+			JOIN class_groups g ON g.id = gs.group_id JOIN courses c ON c.id = g.course_id WHERE gs.student_id = ? AND gs.active = 1
 		UNION ALL SELECT c.name, g.name, 'monitor' FROM group_monitors gm
 			JOIN class_groups g ON g.id = gm.group_id JOIN courses c ON c.id = g.course_id WHERE gm.monitor_id = ?
 		UNION ALL SELECT c.name, g.name, 'profesor' FROM class_groups g

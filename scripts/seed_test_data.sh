@@ -1,76 +1,26 @@
 #!/usr/bin/env bash
-# Carga usuarios de prueba, cursos y clases en EDU-TRACE
+# Carga usuarios de prueba, cursos, clases y talleres en EDU-TRACE.
+# Ya no hay registro ni contraseñas: los datos entran por /internal/v1 (como los empujaría el servicio Python
+# desde Brightspace) y las sesiones se abren con tickets de un solo uso. Requiere INTERNAL_API_KEY: del entorno,
+# de .env o de data/internal_api_key (la genera ./start.sh).
 set -e
 API="${API:-http://127.0.0.1:8080}"
-ENV_FILE="$(dirname "$0")/../.env"
-if [ -z "$TEACHER_CODE" ] && [ -f "$ENV_FILE" ]; then
-  TEACHER_CODE=$(grep -E '^TEACHER_CODE=.+' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
+if [ -z "$INTERNAL_API_KEY" ] && [ -f "$ENV_FILE" ]; then
+  INTERNAL_API_KEY=$(grep -E '^INTERNAL_API_KEY=.+' "$ENV_FILE" | tail -1 | cut -d= -f2-)
 fi
-TEACHER_CODE="${TEACHER_CODE:-admin123}"
+if [ -z "$INTERNAL_API_KEY" ] && [ -s "$ROOT/${DATA_DIR:-data}/internal_api_key" ]; then
+  INTERNAL_API_KEY=$(cat "$ROOT/${DATA_DIR:-data}/internal_api_key")
+fi
+if [ -z "$INTERNAL_API_KEY" ]; then
+  echo "Falta INTERNAL_API_KEY (entorno, .env o data/internal_api_key). Arranca antes ./start.sh." >&2
+  exit 1
+fi
+CURL=(curl -s)
+case "$API" in https://*) CURL+=(-k);; esac
 
-echo "=== 1. Registrando profesor ==="
-PROF_COOKIE=$(curl -s -c - "$API/api/auth/register" \
-  -H "Content-Type: application/json" \
-  -d "$(python3 -c "import json, sys; print(json.dumps({'name': 'Prof. María García', 'email': 'maria.garcia@universidad.edu.co', 'password': 'Profesor2026!', 'role': 'teacher', 'teacher_code': sys.argv[1], 'consent': True}))" "$TEACHER_CODE")" \
-  | grep edutrace_session | awk '{print $NF}')
-echo "  Cookie profesor: $PROF_COOKIE"
-
-echo "=== 2. Creando 2 cursos ==="
-COURSE1=$(curl -s -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/courses" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Introducción a la Programación 2026-1"}')
-COURSE1_ID=$(echo "$COURSE1" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-echo "  Curso 1: $COURSE1_ID"
-
-COURSE2=$(curl -s -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/courses" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Programación Avanzada 2026-1"}')
-COURSE2_ID=$(echo "$COURSE2" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-echo "  Curso 2: $COURSE2_ID"
-
-echo "=== 3. Creando clases (grupos) ==="
-GROUP1=$(curl -s -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/courses/$COURSE1_ID/groups" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Grupo A - Mañana"}')
-GROUP1_ID=$(echo "$GROUP1" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-GROUP1_CODE=$(echo "$GROUP1" | python3 -c "import sys,json; print(json.load(sys.stdin)['join_code'])")
-echo "  Grupo 1 (Intro Prog): $GROUP1_ID  Código: $GROUP1_CODE"
-
-GROUP2=$(curl -s -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/courses/$COURSE2_ID/groups" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Grupo B - Tarde"}')
-GROUP2_ID=$(echo "$GROUP2" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-GROUP2_CODE=$(echo "$GROUP2" | python3 -c "import sys,json; print(json.load(sys.stdin)['join_code'])")
-echo "  Grupo 2 (Prog Avanzada): $GROUP2_ID  Código: $GROUP2_CODE"
-curl -s -b "edutrace_session=$PROF_COOKIE" -X PATCH "$API/api/teacher/groups/$GROUP2_ID/ai-mode" \
-  -H "Content-Type: application/json" -d '{"ai_mode":"inmediata"}' > /dev/null
-echo "  Grupo A en modo supervisado (predeterminado) · Grupo B en modo inmediato"
-
-echo "=== 4. Registrando 5 estudiantes y asignándolos a clases ==="
-
-register_and_join() {
-  local name="$1" email="$2" join_code="$3" group_label="$4"
-  local cookie
-  cookie=$(curl -s -c - "$API/api/auth/register" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\":\"$name\",\"email\":\"$email\",\"password\":\"Alumno2026!\",\"role\":\"student\",\"consent\":true}" \
-    | grep edutrace_session | awk '{print $NF}')
-  curl -s -b "edutrace_session=$cookie" "$API/api/student/groups/join" \
-    -H "Content-Type: application/json" \
-    -d "{\"code\":\"$join_code\"}" > /dev/null
-  echo "  ✓ $name ($email) → $group_label"
-}
-
-# Clase 1: Intro a la Programación (3 estudiantes)
-register_and_join "Carlos Pérez"    "carlos.perez@est.edu.co"    "$GROUP1_CODE" "Intro Prog - Grupo A"
-register_and_join "Ana Rodríguez"   "ana.rodriguez@est.edu.co"   "$GROUP1_CODE" "Intro Prog - Grupo A"
-register_and_join "Luis Martínez"   "luis.martinez@est.edu.co"   "$GROUP1_CODE" "Intro Prog - Grupo A"
-
-# Clase 2: Programación Avanzada (2 estudiantes)
-register_and_join "Sofía López"     "sofia.lopez@est.edu.co"     "$GROUP2_CODE" "Prog Avanzada - Grupo B"
-register_and_join "Diego Ramírez"   "diego.ramirez@est.edu.co"   "$GROUP2_CODE" "Prog Avanzada - Grupo B"
-
-field() {
+jfield() {  # jfield <campo> : lee un campo del JSON de stdin y falla si trae "error"
   python3 -c "import sys, json
 d = json.load(sys.stdin)
 if isinstance(d, dict) and 'error' in d:
@@ -78,61 +28,153 @@ if isinstance(d, dict) and 'error' in d:
 print(d[sys.argv[1]])" "$1"
 }
 
-login_cookie() {
-  curl -s -c - "$API/api/auth/login" -H "Content-Type: application/json" \
-    -d "{\"email\":\"$1\",\"password\":\"$2\"}" | grep edutrace_session | awk '{print $NF}'
+internal() {  # internal <método> <ruta> <json>
+  "${CURL[@]}" -X "$1" "$API/internal/v1/$2" -H "Authorization: Bearer $INTERNAL_API_KEY" \
+    -H "Content-Type: application/json" -d "$3"
 }
 
-create_assignment() {
-  local extra=()
-  for kv in "${@:5}"; do extra+=(--form-string "$kv"); done
-  curl -s -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/groups/$1/assignments" \
-    --form-string "title=$2" --form-string "statement=$3" --form-string "rubric=$4" "${extra[@]}" | field id
+put_user() {  # put_user <id d2l> <nombre> <correo>
+  python3 -c "import json, sys; print(json.dumps({'name': sys.argv[1], 'email': sys.argv[2]}))" "$2" "$3" \
+    | internal PUT "users/d2l:user:$1" "$(cat)" | jfield id > /dev/null
 }
+
+# enroll <id d2l> <rol> <id curso> <nombre curso> ... (pares curso/nombre) → imprime el JSON de respuesta
+enroll() {
+  local user="$1" role="$2"; shift 2
+  python3 -c "import json, sys
+a = sys.argv[2:]
+print(json.dumps({'enrollments': [{'course': {'external_id': 'd2l:ou:' + a[i], 'name': a[i + 1], 'is_active': True}, 'role': sys.argv[1]} for i in range(0, len(a), 2)]}))" "$role" "$@" \
+    | internal PUT "users/d2l:user:$user/enrollments" "$(cat)"
+}
+
+group_of() {  # group_of <json de enroll> <id curso> <campo>
+  python3 -c "import sys, json
+d = json.load(sys.stdin)
+if 'error' in d: sys.exit('  ✗ ' + d['error'])
+print(next(g[sys.argv[2]] for g in d['groups'] if g['course_external_id'] == 'd2l:ou:' + sys.argv[1]))" "$1" "$2"
+}
+
+session_cookie() {  # session_cookie <id d2l> : pide un ticket y lo canjea (sin seguir la redirección)
+  local ticket
+  ticket=$(internal POST session-tickets "{\"user_external_id\":\"d2l:user:$1\"}" | jfield ticket)
+  "${CURL[@]}" -D - -o /dev/null "$API/api/auth/session?ticket=$ticket" | tr -d '\r' \
+    | sed -n 's/^[Ss]et-[Cc]ookie: edutrace_session=\([^;]*\).*/\1/p'
+}
+
+PROF=9001
+echo "=== 1. Sincronizando al profesor ==="
+put_user "$PROF" "Prof. María García" "maria.garcia@universidad.edu.co"
+PROF_COOKIE=$(session_cookie "$PROF")
+[ -n "$PROF_COOKIE" ] || { echo "  ✗ no se pudo abrir la sesión del profesor" >&2; exit 1; }
+echo "  Cookie profesor: $PROF_COOKIE"
+
+echo "=== 2. y 3. Creando 2 cursos con su clase (cada oferta de Brightspace = 1 curso + 1 clase) ==="
+COURSE1_NAME="Introducción a la Programación 2026-1"
+COURSE2_NAME="Programación Avanzada 2026-1"
+# Una sola instantánea por usuario: el profesor da clase en las dos ofertas
+R=$(enroll "$PROF" teacher 6650 "$COURSE1_NAME" 6700 "$COURSE2_NAME")
+GROUP1_ID=$(echo "$R" | group_of 6650 group_id)
+GROUP2_ID=$(echo "$R" | group_of 6700 group_id)
+echo "  Curso 1 (Intro Prog): clase $GROUP1_ID"
+echo "  Curso 2 (Prog Avanzada): clase $GROUP2_ID"
+"${CURL[@]}" -b "edutrace_session=$PROF_COOKIE" -X PATCH "$API/api/teacher/groups/$GROUP2_ID/ai-mode" \
+  -H "Content-Type: application/json" -d '{"ai_mode":"inmediata"}' > /dev/null
+echo "  Grupo A en modo supervisado (predeterminado) · Grupo B en modo inmediato"
+
+echo "=== 4. Sincronizando 5 estudiantes e inscribiéndolos ==="
+
+sync_student() {
+  local ext="$1" name="$2" email="$3" course="$4" course_name="$5" label="$6"
+  put_user "$ext" "$name" "$email"
+  enroll "$ext" student "$course" "$course_name" | jfield enrolled > /dev/null
+  echo "  ✓ $name ($email) → $label"
+}
+
+sync_student 9101 "Carlos Pérez"    "carlos.perez@est.edu.co"    6650 "$COURSE1_NAME" "Intro Prog"
+sync_student 9102 "Ana Rodríguez"   "ana.rodriguez@est.edu.co"   6650 "$COURSE1_NAME" "Intro Prog"
+sync_student 9103 "Luis Martínez"   "luis.martinez@est.edu.co"   6650 "$COURSE1_NAME" "Intro Prog"
+sync_student 9104 "Sofía López"     "sofia.lopez@est.edu.co"     6700 "$COURSE2_NAME" "Prog Avanzada"
+sync_student 9105 "Diego Ramírez"   "diego.ramirez@est.edu.co"   6700 "$COURSE2_NAME" "Prog Avanzada"
+
+field() { jfield "$1"; }
 
 iso_utc() {
   date -u -d "$1" +%Y-%m-%dT%H:%M:%SZ
 }
 
+# Los talleres son carpetas de entrega de Brightspace: título, enunciado y fechas llegan por /internal;
+# la rúbrica, los casos de prueba y la penalización son de EduTrace y los pone el profesor.
+publish_folders() {
+  local payload
+  payload=$(python3 - "$(iso_utc '+5 days')" "$(iso_utc '+7 days')" "$(iso_utc '+20 hours')" "$(iso_utc '-27 hours')" "$(iso_utc '+2 days')" <<'PY'
+import json, sys
+due1, end1, due2, due3, end3 = sys.argv[1:6]
+print(json.dumps({"assignments": [
+  {"external_id": "d2l:folder:701", "title": "Taller 1: promedio de notas",
+   "statement": "Lee tres notas (de 0.0 a 5.0) y muestra su promedio con dos decimales.\nEjemplo: entrada 4.5 3.0 5.0 -> salida Promedio: 4.17",
+   "due_at": due1, "end_at": end1, "score_denominator": 100, "grade_item_id": "d2l:grade:5001", "is_hidden": False},
+  {"external_id": "d2l:folder:702", "title": "Taller 2: suma con ciclos",
+   "statement": "Lee un entero n y muestra la suma de 1 hasta n usando un ciclo.\nEjemplo: entrada 5 -> salida Suma: 15",
+   "due_at": due2, "end_at": due2, "score_denominator": 100, "grade_item_id": "d2l:grade:5002", "is_hidden": False},
+  {"external_id": "d2l:folder:703", "title": "Taller 3: el mayor de tres",
+   "statement": "Lee tres enteros y muestra el mayor usando condicionales.\nEjemplo: entrada 7 12 3 -> salida Mayor: 12",
+   "due_at": due3, "end_at": end3, "score_denominator": 100, "grade_item_id": "d2l:grade:5003", "is_hidden": False}]}))
+PY
+)
+  internal PUT "courses/d2l:ou:6650/assignments" "$payload" | jfield created > /dev/null
+}
+
+assignment_id() {  # assignment_id <título>
+  "${CURL[@]}" -b "edutrace_session=$PROF_COOKIE" "$API/api/teacher/groups/$GROUP1_ID/assignments" \
+    | python3 -c "import sys, json; print(next(a['id'] for a in json.load(sys.stdin) if a['title'] == sys.argv[1]))" "$1"
+}
+
+update_assignment() {  # update_assignment <id> <título> <enunciado> <rúbrica> [campo=valor ...]
+  local id="$1" extra=()
+  for kv in "${@:5}"; do extra+=(--form-string "$kv"); done
+  "${CURL[@]}" -b "edutrace_session=$PROF_COOKIE" -X PUT "$API/api/teacher/assignments/$id" \
+    --form-string "title=$2" --form-string "statement=$3" --form-string "rubric=$4" "${extra[@]}" | field id
+}
+
+login_cookie() {  # login_cookie <id d2l>
+  session_cookie "$1"
+}
+
 attempt() {
   python3 -c "import json, sys; print(json.dumps({'group_id': sys.argv[1], 'assignment_id': sys.argv[2], 'code': sys.argv[3], 'stdin': sys.argv[4]}))" "$2" "$3" "$4" "$5" \
-    | curl -s -b "edutrace_session=$1" "$API/api/compile" -H "Content-Type: application/json" --data @- > /dev/null
+    | "${CURL[@]}" -b "edutrace_session=$1" "$API/api/compile" -H "Content-Type: application/json" --data @- > /dev/null
 }
 
 submit() {
   python3 -c "import json, sys; print(json.dumps({'group_id': sys.argv[1], 'assignment_id': sys.argv[2], 'code': sys.argv[3], 'stdin': sys.argv[4], 'ai_feedback': '', 'ai_feedback_informal': ''}))" "$2" "$3" "$4" "$5" \
-    | curl -s -b "edutrace_session=$1" "$API/api/student/submissions" -H "Content-Type: application/json" --data @- | field id
+    | "${CURL[@]}" -b "edutrace_session=$1" "$API/api/student/submissions" -H "Content-Type: application/json" --data @- | field id
 }
 
 review() {
   python3 -c "import json, sys; print(json.dumps({'feedback': sys.argv[1], 'grade': float(sys.argv[2]), 'return': sys.argv[3] == 'true'}))" "$4" "$2" "$3" \
-    | curl -s -b "edutrace_session=$PROF_COOKIE" -X PUT "$API/api/teacher/submissions/$1/review" -H "Content-Type: application/json" --data @- | field status
+    | "${CURL[@]}" -b "edutrace_session=$PROF_COOKIE" -X PUT "$API/api/teacher/submissions/$1/review" -H "Content-Type: application/json" --data @- | field status
 }
 
-echo "=== 5. Publicando talleres en Intro a la Programación - Grupo A ==="
-T1=$(create_assignment "$GROUP1_ID" "Taller 1: promedio de notas" \
-  "Lee tres notas (de 0.0 a 5.0) y muestra su promedio con dos decimales.
-Ejemplo: entrada 4.5 3.0 5.0 -> salida Promedio: 4.17" \
+echo "=== 5. Carpetas de entrega (Brightspace) y criterios de EduTrace en Intro a la Programación ==="
+publish_folders > /dev/null
+T1=$(assignment_id "Taller 1: promedio de notas")
+T2=$(assignment_id "Taller 2: suma con ciclos")
+T3=$(assignment_id "Taller 3: el mayor de tres")
+update_assignment "$T1" "Taller 1: promedio de notas" "." \
   "Compila (1.0), Lee bien la entrada (1.0), Promedio correcto (2.0), Legibilidad (1.0)" \
-  "due_at=$(iso_utc '+5 days')" "allow_late=true" \
-  'tests=[{"name":"Ejemplo del enunciado","stdin":"4.5 3.0 5.0","expected":"Promedio: 4.17","match":"contiene","hidden":false},{"name":"Notas enteras","stdin":"4 5 5","expected":"Promedio: 4.67","match":"contiene","hidden":false},{"name":"Promedio bajo","stdin":"0 0 1","expected":"Promedio: 0.33","match":"contiene","hidden":true}]')
-T2=$(create_assignment "$GROUP1_ID" "Taller 2: suma con ciclos" \
-  "Lee un entero n y muestra la suma de 1 hasta n usando un ciclo.
-Ejemplo: entrada 5 -> salida Suma: 15" \
+  'tests=[{"name":"Ejemplo del enunciado","stdin":"4.5 3.0 5.0","expected":"Promedio: 4.17","match":"contiene","hidden":false},{"name":"Notas enteras","stdin":"4 5 5","expected":"Promedio: 4.67","match":"contiene","hidden":false},{"name":"Promedio bajo","stdin":"0 0 1","expected":"Promedio: 0.33","match":"contiene","hidden":true}]' > /dev/null
+update_assignment "$T2" "Taller 2: suma con ciclos" "." \
   "Compila (1.0), Usa un ciclo (1.0), Resultado correcto (2.0), Legibilidad (1.0)" \
-  "due_at=$(iso_utc '+20 hours')" "allow_late=false" \
-  'tests=[{"name":"Ejemplo del enunciado","stdin":"5","expected":"Suma: 15","match":"contiene","hidden":false},{"name":"n = 1","stdin":"1","expected":"Suma: 1","match":"contiene","hidden":false},{"name":"n = 10","stdin":"10","expected":"Suma: 55","match":"contiene","hidden":true}]')
-T3=$(create_assignment "$GROUP1_ID" "Taller 3: el mayor de tres" \
-  "Lee tres enteros y muestra el mayor usando condicionales.
-Ejemplo: entrada 7 12 3 -> salida Mayor: 12" \
+  'tests=[{"name":"Ejemplo del enunciado","stdin":"5","expected":"Suma: 15","match":"contiene","hidden":false},{"name":"n = 1","stdin":"1","expected":"Suma: 1","match":"contiene","hidden":false},{"name":"n = 10","stdin":"10","expected":"Suma: 55","match":"contiene","hidden":true}]' > /dev/null
+update_assignment "$T3" "Taller 3: el mayor de tres" "." \
   "Compila (1.0), Usa condicionales (1.0), Resultado correcto (2.0), Legibilidad (1.0)" \
-  "due_at=$(iso_utc '-27 hours')" "allow_late=true" "late_penalty=0.5" \
-  'tests=[{"name":"Ejemplo del enunciado","stdin":"7 12 3","expected":"Mayor: 12","match":"contiene","hidden":false},{"name":"Repetidos","stdin":"5 5 2","expected":"Mayor: 5","match":"contiene","hidden":false},{"name":"Negativos","stdin":"-3 -8 -1","expected":"Mayor: -1","match":"contiene","hidden":true}]')
-echo "  ✓ 3 talleres con 3 casos de prueba cada uno (1 oculto): el 1 vence en 5 días, el 2 en 20 h (sin tardías) y el 3 venció hace 27 h (tardías con −0.5 por día)"
+  "late_penalty=0.5" \
+  'tests=[{"name":"Ejemplo del enunciado","stdin":"7 12 3","expected":"Mayor: 12","match":"contiene","hidden":false},{"name":"Repetidos","stdin":"5 5 2","expected":"Mayor: 5","match":"contiene","hidden":false},{"name":"Negativos","stdin":"-3 -8 -1","expected":"Mayor: -1","match":"contiene","hidden":true}]' > /dev/null
+echo "  ✓ 3 carpetas con 3 casos de prueba cada una (1 oculto): la 1 vence en 5 días, la 2 en 20 h (sin tardías) y la 3 venció hace 27 h (tardías con −0.5 por día)"
 
-ANA_COOKIE=$(login_cookie "ana.rodriguez@est.edu.co" "Alumno2026!")
-CARLOS_COOKIE=$(login_cookie "carlos.perez@est.edu.co" "Alumno2026!")
-LUIS_COOKIE=$(login_cookie "luis.martinez@est.edu.co" "Alumno2026!")
+ANA_COOKIE=$(login_cookie 9102)
+CARLOS_COOKIE=$(login_cookie 9101)
+LUIS_COOKIE=$(login_cookie 9103)
 
 CODE_PROMEDIO=$(cat <<'EOF'
 #include <iostream>
@@ -255,25 +297,24 @@ review "$LUIS_T2" 5.0 true "Excelente: el ciclo recorre de 1 hasta n incluido y 
 echo "  ✓ Ana: 4.5 (Taller 1) y 3.2 (Taller 2) devueltas, Taller 3 en revisión · Luis: 5.0"
 
 echo "=== 8. RAE de la materia y niveles de logro ==="
-API="$API" python3 "$(dirname "$0")/seed_rae_levels.py"
+API="$API" TEACHER_SESSION="$PROF_COOKIE" python3 "$(dirname "$0")/seed_rae_levels.py"
 
 echo ""
 echo "======================================================"
 echo "  ✅ Datos de prueba cargados exitosamente"
 echo "======================================================"
 echo ""
-echo "  PROFESOR:"
-echo "    Email:    maria.garcia@universidad.edu.co"
-echo "    Password: Profesor2026!"
+echo "  PROFESOR (cuenta de Brightspace simulada, sin contraseña):"
+echo "    maria.garcia@universidad.edu.co  (external_id d2l:user:9001)"
 echo ""
-echo "  ESTUDIANTES (Password: Alumno2026!):"
-echo "    Clase 1 - Intro a la Programación / Grupo A:"
-echo "      carlos.perez@est.edu.co"
-echo "      ana.rodriguez@est.edu.co"
-echo "      luis.martinez@est.edu.co"
-echo "    Clase 2 - Programación Avanzada / Grupo B:"
-echo "      sofia.lopez@est.edu.co"
-echo "      diego.ramirez@est.edu.co"
+echo "  ESTUDIANTES (external_id d2l:user:9101 a 9105):"
+echo "    Clase 1 - Intro a la Programación:"
+echo "      carlos.perez@est.edu.co, ana.rodriguez@est.edu.co, luis.martinez@est.edu.co"
+echo "    Clase 2 - Programación Avanzada:"
+echo "      sofia.lopez@est.edu.co, diego.ramirez@est.edu.co"
+echo ""
+echo "  Para entrar como cualquiera: POST /internal/v1/session-tickets con su external_id y abrir"
+echo "  $API/api/auth/session?ticket=<ticket> en el navegador (el servicio Python hace esto tras el login OAuth)."
 echo ""
 echo "  NOTAS (escala 0.0 a 5.0):"
 echo "    ana.rodriguez@est.edu.co: Taller 1 = 4.5, Taller 2 = 3.2, Taller 3 en revisión (entregado tarde)"

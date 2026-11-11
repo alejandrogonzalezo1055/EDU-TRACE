@@ -1,7 +1,9 @@
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
 
-const api = new URL(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").origin;
+const api = new URL(process.env.NEXT_PUBLIC_API_URL || "https://localhost:8080").origin;
 
+// Solo Go recibe fetch del navegador. Python (NEXT_PUBLIC_AUTH_URL) se alcanza por navegación
+// (window.location), que la CSP no restringe, así que no hace falta en connect-src ni en form-action.
 const csp = (dev) => [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,

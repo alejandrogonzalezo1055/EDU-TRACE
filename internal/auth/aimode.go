@@ -68,7 +68,7 @@ func (s *Store) SetGroupAIMode(teacherID, groupID, mode string) error {
 }
 
 func (s *Store) StudentAIBlock(studentID, assignmentID string) (*AIBlock, error) {
-	exam, err := openEvaluation(s.db, `a.group_id IN (SELECT group_id FROM group_students WHERE student_id = ?)`, studentID)
+	exam, err := openEvaluation(s.db, `a.group_id IN (SELECT group_id FROM group_students WHERE student_id = ? AND active = 1)`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -89,12 +89,12 @@ func (s *Store) studentAIAllowed(studentID, assignmentID string) (bool, error) {
 		err = s.db.QueryRow(`SELECT COUNT(*) FROM assignments a
 			JOIN class_groups g ON g.id = a.group_id
 			JOIN group_students gs ON gs.group_id = g.id
-			WHERE a.id = ? AND gs.student_id = ? AND g.ai_mode = 'supervisada'`, assignmentID, studentID).Scan(&supervised)
+			WHERE a.id = ? AND gs.student_id = ? AND gs.active = 1 AND g.ai_mode = 'supervisada'`, assignmentID, studentID).Scan(&supervised)
 	} else {
 		err = s.db.QueryRow(`SELECT COUNT(*) FROM group_students gs
 			JOIN class_groups g ON g.id = gs.group_id
 			JOIN courses c ON c.id = g.course_id
-			WHERE gs.student_id = ? AND g.ai_mode = 'supervisada' AND c.closed_at IS NULL`, studentID).Scan(&supervised)
+			WHERE gs.student_id = ? AND gs.active = 1 AND g.ai_mode = 'supervisada' AND c.closed_at IS NULL`, studentID).Scan(&supervised)
 	}
 	return supervised == 0, err
 }

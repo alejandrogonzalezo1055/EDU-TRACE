@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'monitor')),
-  password_hash  TEXT NOT NULL,
+  password_hash  TEXT NOT NULL, -- '' = cuenta de Brightspace sin contraseña local (no puede usar el login local)
   created_at TEXT NOT NULL,
   compiles INTEGER NOT NULL DEFAULT 0,
   feedbacks INTEGER NOT NULL DEFAULT 0,
@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
   consent_version TEXT NOT NULL DEFAULT '',
   email_notifications INTEGER NOT NULL DEFAULT 1,
   reset_hash TEXT NOT NULL DEFAULT '',
-  reset_expires_at TEXT
+  reset_expires_at TEXT,
+  external_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -30,7 +31,11 @@ CREATE TABLE IF NOT EXISTS courses (
   review_minutes_max REAL,
   batch_hours_max REAL,
   feedback_hours_max REAL,
-  closed_at TEXT
+  closed_at TEXT,
+  external_id TEXT,
+  starts_at TEXT,
+  ends_at TEXT,
+  external_active INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS courses_teacher ON courses(teacher_id);
 
@@ -41,7 +46,8 @@ CREATE TABLE IF NOT EXISTS class_groups (
   name TEXT NOT NULL,
   join_code  TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
-  ai_mode TEXT NOT NULL DEFAULT 'supervisada' CHECK (ai_mode IN ('supervisada', 'inmediata'))
+  ai_mode TEXT NOT NULL DEFAULT 'supervisada' CHECK (ai_mode IN ('supervisada', 'inmediata')),
+  external_id TEXT
 );
 
 
@@ -49,6 +55,8 @@ CREATE TABLE IF NOT EXISTS group_students (
   group_id   TEXT NOT NULL REFERENCES class_groups(id) ON DELETE CASCADE,
   student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   joined_at  TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  ended_at TEXT,
   PRIMARY KEY (group_id, student_id)
 );
 CREATE INDEX IF NOT EXISTS group_students_student ON group_students(student_id);
@@ -64,7 +72,11 @@ CREATE TABLE IF NOT EXISTS assignments (
   allow_late INTEGER NOT NULL DEFAULT 1,
   late_until TEXT,
   late_penalty REAL,
-  evaluation INTEGER NOT NULL DEFAULT 0
+  evaluation INTEGER NOT NULL DEFAULT 0,
+  external_id TEXT,
+  score_denominator REAL,
+  grade_item_id TEXT,
+  is_hidden INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS assignment_files (   
@@ -95,7 +107,13 @@ CREATE TABLE IF NOT EXISTS submissions (
   compiler_output TEXT NOT NULL DEFAULT '',
   program_output TEXT NOT NULL DEFAULT '',
   ai_feedback TEXT NOT NULL DEFAULT '',
-  ai_feedback_informal TEXT NOT NULL DEFAULT ''
+  ai_feedback_informal TEXT NOT NULL DEFAULT '',
+  external_id TEXT,
+  d2l_status TEXT NOT NULL DEFAULT '' CHECK (d2l_status IN ('', 'pendiente', 'enviada', 'fallida')),
+  d2l_attempts INTEGER NOT NULL DEFAULT 0,
+  d2l_next_retry_at TEXT,
+  d2l_error TEXT NOT NULL DEFAULT '',
+  d2l_sent_at TEXT
 );
 CREATE INDEX IF NOT EXISTS submissions_group ON submissions(group_id, kind, created_at);
 CREATE INDEX IF NOT EXISTS submissions_student ON submissions(student_id, group_id, created_at);
@@ -118,7 +136,13 @@ CREATE TABLE IF NOT EXISTS reviews (
   review_ms INTEGER NOT NULL DEFAULT 0,
   ai_minutes INTEGER,
   ai_model TEXT NOT NULL DEFAULT '',
-  ai_prompt TEXT NOT NULL DEFAULT ''
+  ai_prompt TEXT NOT NULL DEFAULT '',
+  d2l_status TEXT NOT NULL DEFAULT '' CHECK (d2l_status IN ('', 'pendiente', 'enviada', 'fallida')),
+  d2l_attempts INTEGER NOT NULL DEFAULT 0,
+  d2l_next_retry_at TEXT,
+  d2l_error TEXT NOT NULL DEFAULT '',
+  d2l_published_at TEXT,
+  d2l_teacher_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS group_monitors (
@@ -279,12 +303,16 @@ CREATE TABLE IF NOT EXISTS course_teachers (
   course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   teacher_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   added_at TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  ended_at TEXT,
   PRIMARY KEY (course_id, teacher_id)
 );
 CREATE INDEX IF NOT EXISTS course_teachers_teacher ON course_teachers(teacher_id);
+-- En las materias espejadas de Brightspace (external_id) el dueño también aparece en course_teachers,
+-- así que solo cuenta mientras su inscripción siga activa. upgradeCourseStaffView lo mantiene al día.
 CREATE VIEW IF NOT EXISTS course_staff AS
-  SELECT id AS course_id, teacher_id FROM courses
-  UNION SELECT course_id, teacher_id FROM course_teachers;
+  SELECT id AS course_id, teacher_id FROM courses WHERE external_id IS NULL
+  UNION SELECT course_id, teacher_id FROM course_teachers WHERE active = 1;
 
 CREATE TABLE IF NOT EXISTS assignment_criteria (
   id TEXT PRIMARY KEY,
@@ -311,4 +339,25 @@ CREATE TABLE IF NOT EXISTS practice_results (
   solved_at TEXT,
   last_at TEXT NOT NULL,
   PRIMARY KEY (student_id, exercise_id)
+);
+
+-- Tickets de un solo uso para abrir sesión (solo se guarda el hash; ver session_tickets.go).
+CREATE TABLE IF NOT EXISTS session_tickets (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+-- Cookies que el servicio Python dejó en el navegador y que Go guarda por usuario para actuar
+-- como su cliente. El valor va cifrado (AES-GCM, clave COOKIE_JAR_KEY); ver cookie_jar.go.
+CREATE TABLE IF NOT EXISTS python_cookie_jar (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  path TEXT NOT NULL DEFAULT '/',
+  expires_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, name)
 );

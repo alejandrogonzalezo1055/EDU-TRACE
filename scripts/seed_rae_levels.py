@@ -6,9 +6,8 @@ import urllib.request
 from http.cookiejar import CookieJar
 
 API = os.environ.get("API", "http://127.0.0.1:8080")
-TEACHER = ("maria.garcia@universidad.edu.co", "Profesor2026!")
 COURSE = "Introducción a la Programación 2026-1"
-GROUP = "Grupo A - Mañana"
+GROUP = COURSE  # cada oferta de Brightspace es un curso con una única clase del mismo nombre
 
 RAES = [
     ("RAE 1", "Identificar información que permite caracterizar un problema informático de complejidad baja, mediante el uso de los principios básicos de Lógica e Ingeniería de Sistemas."),
@@ -31,7 +30,15 @@ PLAN = [
     ("Carlos Pérez", "Taller 1: promedio de notas", True, (2.8, CARLOS_FEEDBACK), {"RAE 1": "bajo", "RAE 2": "bajo", "RAE 3": "", "RAE 4": "bajo"}),
 ]
 
-opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
+SESSION = os.environ.get("TEACHER_SESSION", "")
+if not SESSION:
+    sys.exit("  ✗ Falta TEACHER_SESSION (la define seed_test_data.sh tras abrir la sesión del profesor con un ticket)")
+handlers = [urllib.request.HTTPCookieProcessor(CookieJar())]
+if API.startswith("https://"):
+    import ssl
+    handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))  # certificado local de desarrollo
+opener = urllib.request.build_opener(*handlers)
+opener.addheaders = [("Cookie", "edutrace_session=" + SESSION)]
 
 
 def call(method, path, body=None):
@@ -58,7 +65,6 @@ def find(items, key, value, what):
     sys.exit(f"  ✗ No se encontró {what} «{value}». Carga primero ./scripts/seed_test_data.sh")
 
 
-call("POST", "/api/auth/login", {"email": TEACHER[0], "password": TEACHER[1], "role": "teacher"})
 course = find(call("GET", "/api/teacher/courses"), "name", COURSE, "la materia")
 
 existing = {r["code"]: r for r in course.get("raes", [])}

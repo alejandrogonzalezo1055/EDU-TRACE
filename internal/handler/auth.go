@@ -1,23 +1,22 @@
 package handler
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"log/slog"
 	"net"
 	"net/http"
-	"net/mail"
-	"strings"
+	"net/url"
 	"time"
-	"unicode/utf8"
 
 	"github.com/marlon/edu-trace/internal/auth"
 	"github.com/marlon/edu-trace/internal/config"
 	"github.com/marlon/edu-trace/internal/model"
 )
 
-// AuthHandler agrupa registro, login, logout y sesión actual.
+// AuthHandler agrupa la apertura de sesión por ticket, logout, sesión actual y datos de la cuenta.
 type AuthHandler struct {
 	store *auth.Store
 	cfg *config.Config
@@ -53,21 +52,6 @@ func toPublic(u *auth.User) publicUser {
 	return p
 }
 
-type registerRequest struct {
-	Name string `json:"name"`
-	Email string `json:"email"`
-	Password string `json:"password"`
-	Role auth.Role `json:"role"`
-	TeacherCode string `json:"teacher_code"`
-	Consent bool `json:"consent"`
-}
-
-type loginRequest struct {
-	Email string `json:"email"`
-	Password string `json:"password"`
-	Role auth.Role `json:"role"`
-}
-
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -90,128 +74,88 @@ func decodeJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64)
 	return true
 }
 
-func roleLabel(r auth.Role) string {
-	switch r {
-	case auth.RoleTeacher:
-		return "profesor"
-	case auth.RoleMonitor:
-		return "monitor"
-	}
-	return "estudiante"
-}
-
-// Register maneja POST /api/auth/register.
-func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
-	var req registerRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	name := strings.TrimSpace(req.Name)
-	if n := utf8.RuneCountInString(name); n < 2 || n > 80 {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{Error: "el nombre debe tener entre 2 y 80 caracteres"})
-		return
-	}
-	if addr, err := mail.ParseAddress(req.Email); err != nil || addr.Address != strings.TrimSpace(req.Email) || len(req.Email) > 254 {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{Error: "email inválido"})
-		return
-	}
-	if n := utf8.RuneCountInString(req.Password); n < 8 || n > 128 {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{Error: "la contraseña debe tener entre 8 y 128 caracteres"})
-		return
-	}
-	if !req.Consent {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{Error: "debes autorizar el tratamiento de tus datos personales para crear la cuenta"})
-		return
-	}
-
-	switch req.Role {
-	case auth.RoleStudent, auth.RoleMonitor:
-	case auth.RoleTeacher:
-		// Las cuentas docentes requieren el código que define el servidor (TEACHER_CODE).
-		ip := clientIP(r)
-		if h.limiter.Blocked(ip) {
-			writeJSON(w, http.StatusTooManyRequests, model.ErrorResponse{Error: "demasiados intentos, espera unos minutos"})
-			return
-		}
-		if h.cfg.TeacherCode == "" ||
-			subtle.ConstantTimeCompare([]byte(req.TeacherCode), []byte(h.cfg.TeacherCode)) != 1 {
-			h.limiter.Fail(ip)
-			writeJSON(w, http.StatusForbidden, model.ErrorResponse{Error: "código de profesor incorrecto"})
-			return
-		}
-	default:
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{Error: "rol inválido"})
-		return
-	}
-
-	u, err := h.store.CreateUser(name, req.Email, req.Password, req.Role)
-	if errors.Is(err, auth.ErrEmailTaken) {
-		writeJSON(w, http.StatusConflict, model.ErrorResponse{Error: err.Error()})
-		return
-	}
-	if err != nil {
-		slog.Error("register failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{Error: "no se pudo crear la cuenta"})
-		return
-	}
-
-	consentAt, err := h.store.RecordConsent(u.ID)
-	if err != nil {
-		slog.Error("record consent failed", "user_id", u.ID, "error", err)
-	} else {
-		u.ConsentAt, u.ConsentVersion = &consentAt, auth.PrivacyVersion
-	}
-	slog.Info("user registered", "user_id", u.ID, "role", u.Role)
-	code, err := h.store.NewRecoveryCode(u.ID)
-	if err != nil {
-		slog.Error("recovery code failed", "user_id", u.ID, "error", err)
-		code = ""
-	}
-	h.startSession(w, u, code)
-}
-
-// Login maneja POST /api/auth/login.
-func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	var req loginRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
+// SessionByTicket maneja GET /api/auth/session?ticket=: canjea el ticket de un solo uso que pidió el
+// servicio Python, abre la sesión de Go (cookie propia edutrace_session) y redirige al frontend.
+// Ticket inválido, vencido o ya usado: 401 y se manda al navegador a /login.
+func (h *AuthHandler) SessionByTicket(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if h.limiter.Blocked(ip) {
 		writeJSON(w, http.StatusTooManyRequests, model.ErrorResponse{Error: "demasiados intentos, espera unos minutos"})
 		return
 	}
-
-	u, err := h.store.Authenticate(req.Email, req.Password)
-	if err != nil {
+	u, err := h.store.ConsumeSessionTicket(r.URL.Query().Get("ticket"))
+	if errors.Is(err, auth.ErrInvalidTicket) {
 		h.limiter.Fail(ip)
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{Error: err.Error()})
+		reason := "invalid_ticket"
+		if errors.Is(err, auth.ErrTicketExpired) {
+			reason = "session_expired"
+		}
+		h.redirectToLogin(w, reason)
 		return
 	}
-	if req.Role != "" && req.Role != u.Role {
-		writeJSON(w, http.StatusForbidden, model.ErrorResponse{
-			Error: "esta cuenta es de " + roleLabel(u.Role) + ", no de " + roleLabel(req.Role),
-		})
+	if err != nil {
+		slog.Error("consume session ticket failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{Error: "no se pudo iniciar sesión"})
 		return
 	}
-
-	h.startSession(w, u, "")
-}
-
-type sessionResponse struct {
-	publicUser
-	RecoveryCode string `json:"recovery_code,omitempty"`
-}
-
-func (h *AuthHandler) startSession(w http.ResponseWriter, u *auth.User, recoveryCode string) {
 	token, expires, err := h.store.CreateSession(u.ID)
 	if err != nil {
 		slog.Error("create session failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{Error: "no se pudo iniciar sesión"})
 		return
 	}
+	h.setSessionCookie(w, token, expires)
+	h.captureJar(r, u.ID)
+	slog.Info("session started from ticket", "user_id", u.ID)
+	target := h.cfg.PublicURL
+	if target == "" {
+		target = "/"
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// captureJar guarda en el almacén cifrado las cookies que Python dejó en el navegador (el navegador
+// las manda también a Go porque las cookies de un mismo host no distinguen puerto).
+func (h *AuthHandler) captureJar(r *http.Request, userID string) {
+	if !h.store.JarEnabled() {
+		return
+	}
+	saved := 0
+	for _, name := range h.cfg.PythonCookieNames {
+		c, err := r.Cookie(name)
+		if err != nil || c.Value == "" {
+			continue
+		}
+		if err := h.store.SaveJarCookie(userID, auth.JarCookie{Name: name, Value: c.Value, Path: "/"}); err != nil {
+			slog.Error("save cookie jar failed", "user_id", userID, "cookie", name, "error", err)
+			continue
+		}
+		saved++
+	}
+	if saved > 0 {
+		slog.Info("python cookies stored", "user_id", userID, "count", saved)
+		// Con cookies nuevas, lo que esperaba una sesión de Brightspace puede enviarse ya.
+		if err := h.store.WakeD2LFor(userID); err != nil {
+			slog.Error("wake brightspace queue failed", "user_id", userID, "error", err)
+		}
+	}
+}
+
+// redirectToLogin responde 401 e indica el destino por Location, Refresh y meta refresh (un 401 no
+// hace que el navegador siga Location por sí solo). reason va como /login?error=<reason>, que el
+// frontend traduce a un mensaje (invalid_ticket, session_expired).
+func (h *AuthHandler) redirectToLogin(w http.ResponseWriter, reason string) {
+	login := h.cfg.PublicURL + "/login?error=" + url.QueryEscape(reason)
+	w.Header().Set("Location", login)
+	w.Header().Set("Refresh", "0; url="+login)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusUnauthorized)
+	esc := html.EscapeString(login)
+	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%[1]s"><title>Sesión no iniciada</title><p>El enlace de acceso no es válido o venció. <a href="%[1]s">Volver a iniciar sesión</a></p>`, esc)
+}
+
+// setSessionCookie: HttpOnly, SameSite=Lax y Secure (forzado en config cuando Go sirve HTTPS).
+func (h *AuthHandler) setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: auth.CookieName,
 		Value: token,
@@ -221,16 +165,16 @@ func (h *AuthHandler) startSession(w http.ResponseWriter, u *auth.User, recovery
 		Secure: h.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
-	resp := sessionResponse{publicUser: toPublic(u), RecoveryCode: recoveryCode}
-	if recoveryCode != "" {
-		resp.HasRecovery = true
-	}
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // Logout maneja POST /api/auth/logout.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(auth.CookieName); err == nil {
+		if u, ok := h.store.UserForSession(c.Value); ok {
+			if err := h.store.DeleteJar(u.ID); err != nil {
+				slog.Error("delete cookie jar failed", "user_id", u.ID, "error", err)
+			}
+		}
 		if err := h.store.DeleteSession(c.Value); err != nil {
 			slog.Error("delete session failed", "error", err)
 		}

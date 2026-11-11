@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { Avatar } from "@/components/ui";
 import { Role } from "@/lib/api";
@@ -10,7 +9,6 @@ import { ROLE_LABELS, saveRole } from "@/lib/role";
 
 export default function UserMenu() {
   const { user, logout } = useAuth();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -32,17 +30,16 @@ export default function UserMenu() {
 
   const handleLogout = async () => {
     setOpen(false);
-    await logout();
-    router.replace("/login");
+    await logout(); // cierra Go y navega a Python (/auth/logout-url)
   };
 
-  // Cada cuenta tiene un solo rol: cambiar de rol es entrar con la otra cuenta.
+  // El rol principal lo calcula el backend por inscripciones; cambiarlo sigue siendo
+  // cerrar sesión (también la de Brightspace) y volver a entrar.
   const switchRole = async (role: Role) => {
     setOpen(false);
     if (role === user.role) return;
-    saveRole(role); // el login lo lee aunque la redirección llegue sin ?rol=
+    saveRole(role);
     await logout();
-    router.replace(`/login?rol=${role}`);
   };
 
   return (
@@ -99,10 +96,7 @@ export default function UserMenu() {
             onClick={() => setOpen(false)}
             className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-semibold text-ink-soft hover:bg-lavender-50 hover:text-ink"
           >
-            Mi cuenta y contraseña
-            {!user.has_recovery && (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">Sin código</span>
-            )}
+            Mi cuenta
           </Link>
           <button
             role="menuitem"

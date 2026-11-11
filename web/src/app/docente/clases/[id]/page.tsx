@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import RequireAuth from "@/components/RequireAuth";
 import AppShell from "@/components/AppShell";
-import { Avatar, Card, ProgressRing, RenameForm, SmallButton } from "@/components/ui";
+import { Avatar, Card, ProgressRing, SmallButton } from "@/components/ui";
 import { MonitorsCard } from "@/components/ClassAdmin";
 import TeacherAssignments from "@/components/TeacherAssignments";
 import StudentProcess from "@/components/StudentProcess";
@@ -19,55 +19,13 @@ import { ReviewPill, StatusPill, SubmissionDetail } from "@/components/Submissio
 import { LatePill } from "@/components/Deadline";
 import {
   Assignment,
-  deleteGroup,
   getGroup,
-  issueResetCode,
-  regenerateJoinCode,
-  removeStudent,
-  renameGroup,
   listGroupAssignments,
   GroupDetail,
-  GroupStudent,
-  listGroupSubmissions,
+    listGroupSubmissions,
   SubmissionMeta,
 } from "@/lib/api";
 import { formatDateTime, isActive, lastSeen, relativeTime } from "@/lib/format";
-
-function CopyCode({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(code);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* portapapeles bloqueado: el código sigue visible */
-        }
-      }}
-      className="flex items-center gap-2 rounded-2xl bg-lavender-50 px-4 py-2 transition hover:bg-lavender-100"
-      title="Copiar código de la clase"
-    >
-      <span className="font-mono text-xl font-extrabold tracking-[0.25em] text-lavender-700">{code}</span>
-      <span className="text-xs font-bold text-lavender-600">{copied ? "¡Copiado!" : "Copiar"}</span>
-    </button>
-  );
-}
-
-function ResetCodeNotice({ name, code, expiresAt, onClose }: { name: string; code: string; expiresAt: string; onClose: () => void }) {
-  return (
-    <div role="status" className="m-1 space-y-2 rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">
-      <p className="font-bold">Código para que {name} restablezca su contraseña</p>
-      <p className="font-mono text-xl font-extrabold tracking-[0.2em]">{code}</p>
-      <p>
-        Entrégaselo en persona. Sirve una sola vez y vence el {formatDateTime(expiresAt)}. En la pantalla de ingreso debe elegir
-        «¿Olvidaste tu contraseña?» y escribir su email, este código y una contraseña nueva.
-      </p>
-      <SmallButton onClick={onClose}>Ya lo entregué</SmallButton>
-    </div>
-  );
-}
 
 function GroupView() {
   const { id } = useParams<{ id: string }>();
@@ -77,12 +35,8 @@ function GroupView() {
   const [error, setError] = useState<string | null>(null);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState(false);
   const [managing, setManaging] = useState(false);
   const [matrixKey, setMatrixKey] = useState(0);
-  const [adminError, setAdminError] = useState<string | null>(null);
-  const [resetCode, setResetCode] = useState<{ name: string; code: string; expiresAt: string } | null>(null);
-  const router = useRouter();
   const wantedStudent = useSearchParams().get("estudiante");
 
   useEffect(() => {
@@ -160,62 +114,6 @@ function GroupView() {
     );
   if (!group || !submissions) return <p className="mx-auto max-w-7xl text-sm text-ink-soft">Cargando...</p>;
 
-  const run = async (action: () => Promise<void>, fallback: string) => {
-    setAdminError(null);
-    try {
-      await action();
-    } catch (err) {
-      setAdminError(err instanceof Error ? err.message : fallback);
-    }
-  };
-
-  const newCode = () => {
-    if (!window.confirm("¿Generar un código nuevo? El código actual dejará de funcionar; los estudiantes ya inscritos siguen en la clase.")) return;
-    run(async () => {
-      const { join_code } = await regenerateJoinCode(group.id);
-      setGroup({ ...group, join_code });
-    }, "No se pudo generar el código");
-  };
-
-  const removeGroup = () => {
-    if (
-      !window.confirm(
-        `¿Eliminar la clase «${group.name}»? Se borrarán sus talleres, entregas, intentos, revisiones y la retroalimentación de los monitores. No se puede deshacer.`
-      )
-    )
-      return;
-    run(async () => {
-      await deleteGroup(group.id);
-      router.replace("/docente");
-    }, "No se pudo eliminar la clase");
-  };
-
-  const kick = (s: GroupStudent) => {
-    if (!window.confirm(`¿Quitar a ${s.name} de la clase? Se borrarán sus entregas e intentos en esta clase.`)) return;
-    run(async () => {
-      await removeStudent(group.id, s.id);
-      setGroup({ ...group, students: group.students.filter((x) => x.id !== s.id) });
-      setSubmissions(submissions.filter((m) => m.student_id !== s.id));
-      if (studentId === s.id) {
-        setStudentId(null);
-        setSubmissionId(null);
-      }
-    }, "No se pudo quitar al estudiante");
-  };
-
-  const resetPassword = (s: GroupStudent) => {
-    if (
-      !window.confirm(
-        `¿Generar un código para que ${s.name} restablezca su contraseña? Hazlo solo si te lo pidió en persona: con el código cualquiera puede entrar a su cuenta. El estudiante recibirá un aviso.`
-      )
-    )
-      return;
-    run(async () => {
-      const { code, expires_at } = await issueResetCode(group.id, s.id);
-      setResetCode({ name: s.name, code, expiresAt: expires_at });
-    }, "No se pudo generar el código");
-  };
-
   const total = group.students.length;
   const active = group.students.filter(isActive).length;
   const withSubmission = group.students.filter((s) => s.submission_count > 0).length;
@@ -233,7 +131,7 @@ function GroupView() {
 
       {group.closed_at && (
         <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
-          El periodo de esta materia se cerró el {formatDateTime(group.closed_at)}: los estudiantes ya no pueden enviar ni unirse.
+          El periodo de esta materia se cerró el {formatDateTime(group.closed_at)}: los estudiantes ya no pueden enviar.
           {group.purge_at
             ? ` Los datos de la clase se borrarán el ${formatDateTime(group.purge_at)}; exporta antes las notas y las revisiones.`
             : " Los datos no se borran automáticamente."}{" "}
@@ -244,33 +142,12 @@ function GroupView() {
       <section className="rise-in flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-white p-5 sm:p-6 shadow-soft">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-bold uppercase tracking-wider text-lavender-700">{group.course_name}</p>
-          {renaming ? (
-            <div className="my-1 flex">
-              <RenameForm
-                initial={group.name}
-                onCancel={() => setRenaming(false)}
-                onSave={async (name) => {
-                  await renameGroup(group.id, name);
-                  setGroup({ ...group, name });
-                  setRenaming(false);
-                }}
-              />
-            </div>
-          ) : (
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">{group.name}</h1>
-          )}
-          <p className="mt-0.5 text-sm text-ink-soft">Comparte este código para que tus estudiantes se unan a la clase.</p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">{group.name}</h1>
+          <p className="mt-0.5 text-sm text-ink-soft">Esta clase y sus estudiantes se gestionan en Brightspace.</p>
           <div className="mt-2 -ml-3 flex flex-wrap gap-1">
-            <SmallButton onClick={() => setRenaming(true)}>Renombrar clase</SmallButton>
-            <SmallButton onClick={newCode}>Generar código nuevo</SmallButton>
-            <SmallButton tone="danger" onClick={removeGroup}>
-              Eliminar clase
-            </SmallButton>
             <ExportButtons groupId={group.id} />
           </div>
-          {adminError && <p className="mt-2 rounded-2xl bg-peach-50 px-4 py-2 text-sm font-semibold text-peach-700">{adminError}</p>}
         </div>
-        <CopyCode code={group.join_code} />
       </section>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -345,15 +222,9 @@ function GroupView() {
 
       <div id="talleres" className="scroll-mt-4">
       <TeacherAssignments
-        groupId={group.id}
         assignments={assignments}
         submissionCounts={perAssignment}
-        onCreated={(a) => setAssignments((list) => [a, ...list])}
         onUpdated={(a) => setAssignments((list) => list.map((x) => (x.id === a.id ? a : x)))}
-        onDeleted={(aid) => {
-          setAssignments((list) => list.filter((x) => x.id !== aid));
-          setSubmissions((list) => list?.map((m) => (m.assignment_id === aid ? { ...m, assignment_id: undefined } : m)) ?? null);
-        }}
       />
       </div>
 
@@ -368,15 +239,14 @@ function GroupView() {
           action={
             <span className="flex items-center gap-2">
               {total > 0 && (
-                <SmallButton onClick={() => setManaging((m) => !m)}>{managing ? "Listo" : "Administrar"}</SmallButton>
+                <SmallButton onClick={() => setManaging((m) => !m)}>{managing ? "Listo" : "Reportes"}</SmallButton>
               )}
               <span className="text-xs font-semibold text-ink-faint">{total}</span>
             </span>
           }
         >
-          {resetCode && <ResetCodeNotice {...resetCode} onClose={() => setResetCode(null)} />}
-          {total === 0 ? (
-            <p className="p-3 text-sm text-ink-soft">Nadie se ha unido todavía. Comparte el código {group.join_code}.</p>
+                    {total === 0 ? (
+            <p className="p-3 text-sm text-ink-soft">Todavía no hay estudiantes inscritos en esta clase en Brightspace.</p>
           ) : (
             <ul className="space-y-1">
               <li>
@@ -419,14 +289,6 @@ function GroupView() {
                     >
                       Reporte
                     </Link>
-                  )}
-                  {managing && (
-                    <>
-                      <SmallButton onClick={() => resetPassword(s)}>Contraseña</SmallButton>
-                      <SmallButton tone="danger" onClick={() => kick(s)}>
-                        Quitar
-                      </SmallButton>
-                    </>
                   )}
                 </li>
               ))}

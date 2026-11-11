@@ -65,6 +65,9 @@ type Store struct {
 	dir string
 	ttl time.Duration
 	retention time.Duration
+	ticketTTL time.Duration
+	jarKey []byte
+	d2lEnabled bool // hay servicio Python configurado: las entregas y revisiones espejadas se encolan hacia Brightspace
 }
 
 // OpenStore abre (o crea) la base en dir/edutrace.db. Si encuentra un edutrace.json
@@ -87,7 +90,7 @@ func OpenStore(dir string, ttl time.Duration) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("crear esquema: %w", err)
 	}
-	s := &Store{db: db, dir: dir, ttl: ttl, retention: DefaultRetention}
+	s := &Store{db: db, dir: dir, ttl: ttl, retention: DefaultRetention, ticketTTL: TicketTTL}
 	if err := s.upgradeSchema(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("actualizar esquema: %w", err)
@@ -245,7 +248,7 @@ func (s *Store) Authenticate(email, password string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !CheckPassword(password, u.PasswordHash) {
+	if u.PasswordHash == "" || !CheckPassword(password, u.PasswordHash) { // '' = cuenta de Brightspace
 		return nil, ErrInvalidCredentials
 	}
 	return u, nil

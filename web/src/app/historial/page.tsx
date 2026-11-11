@@ -9,7 +9,7 @@ import { Card, Spinner } from "@/components/ui";
 import { StatusPill } from "@/components/SubmissionView";
 import AnnotatedCode from "@/components/AnnotatedCode";
 import { LatePill } from "@/components/Deadline";
-import { AnnotationsPill, MonitorCountPill, ReviewStatusPill, SubmissionFeedback } from "@/components/StudentFeedback";
+import { AnnotationsPill, BrightspacePill, MonitorCountPill, ReviewStatusPill, SubmissionFeedback } from "@/components/StudentFeedback";
 import { getMyHistory, getMySubmission, StudentHistory, StudentSubmission, Submission } from "@/lib/api";
 import TestResults, { TestsPill } from "@/components/TestResults";
 import { formatDateTime, formatFeedback, informalHeadings } from "@/lib/format";
@@ -282,6 +282,7 @@ function HistoryView() {
                         <LatePill meta={s} />
                         <AnnotationsPill item={s} />
                         <MonitorCountPill item={s} />
+                        <BrightspacePill meta={s} />
                         <ReviewStatusPill item={s} />
                       </Row>
                     ))}

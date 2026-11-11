@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { getMe, logout as apiLogout, User } from "@/lib/api";
+import { logoutUrl } from "@/lib/auth";
 
 interface AuthState {
   user: User | null;
@@ -24,8 +25,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // 1) cierra la sesión de EduTrace en Go; 2) navega a Python para cerrar la de Brightspace.
     await apiLogout().catch(() => {});
     setUser(null);
+    window.location.assign(logoutUrl());
   }, []);
 
   return (

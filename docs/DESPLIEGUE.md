@@ -19,7 +19,7 @@ Para probar la accesibilidad en local, con el backend y el frontend en marcha:
 ```bash
 cd web
 npx playwright install --only-shell chromium
-E2E_API=http://localhost:8080 E2E_WEB=http://localhost:3000 E2E_TEACHER_CODE=<el TEACHER_CODE del backend> npm run test:a11y
+E2E_API=http://localhost:8080 E2E_WEB=http://localhost:3000 E2E_INTERNAL_API_KEY=<la INTERNAL_API_KEY del backend> npm run test:a11y
 ```
 
 ## CD: `.github/workflows/cd.yaml`
@@ -54,7 +54,7 @@ sudo -u edutrace cp /opt/edutrace/.env /opt/edutrace-pruebas/.env
 sudo -u edutrace nano /opt/edutrace-pruebas/.env
 ```
 
-En el `.env` de pruebas cambia `PORT=8081`, `WEB_PORT=3001`, el dominio de pruebas en `PUBLIC_URL`, `NEXT_PUBLIC_API_URL` y `ALLOWED_ORIGINS`, y usa otro `TEACHER_CODE`. Deja `SMTP_HOST` vacío para que las pruebas no envíen correos a estudiantes reales.
+En el `.env` de pruebas cambia `PORT=8081`, `WEB_PORT=3001`, el dominio de pruebas en `PUBLIC_URL`, `NEXT_PUBLIC_API_URL` y `ALLOWED_ORIGINS`, y usa otra `INTERNAL_API_KEY` (y otra `COOKIE_JAR_KEY`). Deja `SMTP_HOST` vacío para que las pruebas no envíen correos a estudiantes reales.
 
 ```bash
 sudo cp /opt/edutrace/deploy/edutrace-pruebas-backend.service /opt/edutrace/deploy/edutrace-pruebas-web.service /etc/systemd/system/
@@ -80,7 +80,8 @@ sudo -u edutrace nano /opt/edutrace/.env
 En `.env` de producción, con el dominio real en lugar de `edutrace.ejemplo.edu.co`:
 
 ```bash
-TEACHER_CODE=<un código largo y aleatorio>
+INTERNAL_API_KEY=<openssl rand -hex 32>
+COOKIE_JAR_KEY=<openssl rand -base64 32>
 PUBLIC_URL=https://edutrace.ejemplo.edu.co
 NEXT_PUBLIC_API_URL=https://edutrace.ejemplo.edu.co
 ALLOWED_ORIGINS=https://edutrace.ejemplo.edu.co

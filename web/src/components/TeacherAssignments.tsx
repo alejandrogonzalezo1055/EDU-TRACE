@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Assignment, assignmentFileUrl, createAssignment, Criterion, deleteAssignment, TestCase, TestMatch, updateAssignment } from "@/lib/api";
+import { Assignment, assignmentFileUrl, Criterion, TestCase, TestMatch, updateAssignment } from "@/lib/api";
 import { Card, SmallButton } from "@/components/ui";
 import { formatDeadline, formatSize } from "@/lib/format";
 import { DeadlineBadge } from "@/components/Deadline";
@@ -160,55 +160,39 @@ const fieldClass =
   "w-full rounded-2xl border border-lavender-100 bg-lavender-50/60 px-4 py-2.5 text-sm placeholder-ink-faint " +
   "focus:border-lavender-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-lavender-100";
 
-function toLocalInput(iso?: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
+/**
+ * Solo se completa lo propio de EduTrace (rúbrica, casos de prueba, criterios, archivos, modo evaluación y
+ * penalización). Título, enunciado y fechas vienen de la carpeta de entrega de Brightspace y no se editan aquí.
+ */
 function AssignmentForm({
-  groupId,
   initial,
   onSaved,
   onCancel,
 }: {
-  groupId: string;
-  initial?: Assignment;
+  initial: Assignment;
   onSaved: (a: Assignment) => void;
   onCancel?: () => void;
 }) {
-  const [title, setTitle] = useState(initial?.title ?? "");
-  const [statement, setStatement] = useState(initial?.statement ?? "");
-  const [rubric, setRubric] = useState(initial?.rubric ?? "");
-  const [due, setDue] = useState(toLocalInput(initial?.due_at));
-  const [lateMode, setLateMode] = useState<"accept" | "until" | "closed">(
-    !initial || initial.allow_late ? (initial?.late_until ? "until" : "accept") : "closed"
-  );
-  const [lateUntil, setLateUntil] = useState(toLocalInput(initial?.late_until));
-  const [penalty, setPenalty] = useState(initial?.late_penalty !== undefined ? String(initial.late_penalty) : "");
-  const [evaluation, setEvaluation] = useState(initial?.evaluation ?? false);
-  const [tests, setTests] = useState<TestCase[]>(initial?.tests ?? []);
-  const [criteria, setCriteria] = useState<Criterion[]>(initial?.criteria ?? []);
+  const [rubric, setRubric] = useState(initial.rubric ?? "");
+  const due = initial.due_at ?? "";
+  const lateMode: "accept" | "until" | "closed" = !initial.allow_late ? "closed" : initial.late_until ? "until" : "accept";
+  const [penalty, setPenalty] = useState(initial.late_penalty !== undefined ? String(initial.late_penalty) : "");
+  const [evaluation, setEvaluation] = useState(initial.evaluation);
+  const [tests, setTests] = useState<TestCase[]>(initial.tests ?? []);
+  const [criteria, setCriteria] = useState<Criterion[]>(initial.criteria ?? []);
   const criteriaError = criteria.some((c) => !c.name.trim() || !(c.points > 0 && c.points <= 100))
     ? "Cada criterio necesita un nombre y un puntaje entre 0.1 y 100."
     : null;
   const testsError = tests.some((t) => !t.expected.trim()) ? "Cada caso de prueba necesita su salida esperada." : null;
-  const dueMs = due ? new Date(due).getTime() : null;
-  const lateUntilMs = lateMode === "until" && lateUntil ? new Date(lateUntil).getTime() : null;
   const policyError =
     evaluation && !due
-      ? "Un taller en modo evaluación necesita fecha límite: la IA queda apagada para la clase hasta esa fecha."
-      : lateMode === "until" && !lateUntil
-      ? "Indica hasta cuándo se reciben entregas tardías."
-      : dueMs !== null && lateUntilMs !== null && lateUntilMs <= dueMs
-        ? "El cierre de entregas tardías debe ser posterior a la fecha límite."
-        : penalty.trim() && !(Number(penalty.replace(",", ".")) >= 0 && Number(penalty.replace(",", ".")) <= 5)
-          ? "La penalización por día debe estar entre 0.0 y 5.0."
-          : null;
+      ? "Un taller en modo evaluación necesita fecha límite en Brightspace: la IA queda apagada para la clase hasta esa fecha."
+      : penalty.trim() && !(Number(penalty.replace(",", ".")) >= 0 && Number(penalty.replace(",", ".")) <= 5)
+        ? "La penalización por día debe estar entre 0.0 y 5.0."
+        : null;
   const [files, setFiles] = useState<File[]>([]);
   const [removed, setRemoved] = useState<Set<string>>(new Set());
-  const kept = (initial?.files ?? []).filter((f) => !removed.has(f.id));
+  const kept = initial.files.filter((f) => !removed.has(f.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -232,15 +216,8 @@ function AssignmentForm({
     setError(null);
     try {
       const form = new FormData();
-      form.append("title", title.trim());
-      form.append("statement", statement.trim());
       if (rubric.trim()) form.append("rubric", rubric.trim());
-      if (due) {
-        form.append("due_at", new Date(due).toISOString());
-        form.append("allow_late", lateMode === "closed" ? "false" : "true");
-        if (lateMode === "until" && lateUntil) form.append("late_until", new Date(lateUntil).toISOString());
-        if (lateMode !== "closed" && penalty.trim()) form.append("late_penalty", penalty.trim().replace(",", "."));
-      }
+      if (due && initial.allow_late && penalty.trim()) form.append("late_penalty", penalty.trim().replace(",", "."));
       form.append("evaluation", evaluation ? "true" : "false");
       form.append(
         "tests",
@@ -249,23 +226,10 @@ function AssignmentForm({
       form.append("criteria", JSON.stringify(criteria.map((c) => ({ name: c.name.trim(), points: c.points }))));
       files.forEach((f) => form.append("files", f, f.name));
       removed.forEach((id) => form.append("remove_files", id));
-      const a = initial ? await updateAssignment(initial.id, form) : await createAssignment(groupId, form);
-      if (!initial) {
-        setTitle("");
-        setStatement("");
-        setRubric("");
-        setDue("");
-        setLateMode("accept");
-        setLateUntil("");
-        setPenalty("");
-        setEvaluation(false);
-        setTests([]);
-        setCriteria([]);
-        setFiles([]);
-      }
+      const a = await updateAssignment(initial.id, form);
       onSaved(a);
     } catch (err) {
-      setError(err instanceof Error ? err.message : initial ? "No se pudo guardar el taller" : "No se pudo crear el taller");
+      setError(err instanceof Error ? err.message : "No se pudo guardar el taller");
     } finally {
       setBusy(false);
     }
@@ -273,22 +237,13 @@ function AssignmentForm({
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Título (p. ej. Taller 1: ciclos)"
-        maxLength={120}
-        required
-        className={fieldClass}
-      />
-      <textarea
-        value={statement}
-        onChange={(e) => setStatement(e.target.value)}
-        placeholder="Enunciado: qué debe hacer el programa, entradas y salidas esperadas, ejemplos…"
-        required
-        maxLength={20000}
-        className={`${fieldClass} h-36 resize-y`}
-      />
+      <div className="space-y-1 rounded-2xl bg-lavender-50/60 px-4 py-3 text-sm">
+        <p className="font-bold">{initial.title}</p>
+        <p className="text-xs text-ink-faint">
+          El título, el enunciado y las fechas se gestionan en Brightspace.
+          {initial.due_at && <> Fecha límite: <span className="font-semibold text-ink-soft">{formatDeadline(initial.due_at)}</span>.</>}
+        </p>
+      </div>
       <textarea
         value={rubric}
         onChange={(e) => setRubric(e.target.value)}
@@ -296,23 +251,6 @@ function AssignmentForm({
         maxLength={5000}
         className={`${fieldClass} h-20 resize-y`}
       />
-      <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 text-sm font-semibold text-ink-soft">
-          Fecha límite
-          <input
-            type="datetime-local"
-            value={due}
-            onChange={(e) => setDue(e.target.value)}
-            className="rounded-full border border-lavender-100 bg-lavender-50/60 px-3 py-1.5 text-sm text-ink
-              focus:border-lavender-300 focus:outline-none focus:ring-4 focus:ring-lavender-100"
-          />
-        </label>
-        <span className="text-xs text-ink-faint">(opcional, en tu hora local)</span>
-        {dueMs !== null && dueMs < Date.now() && (
-          <span className="text-xs font-semibold text-peach-700">Esta fecha ya pasó.</span>
-        )}
-      </div>
-
       <label className="flex items-start gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm">
         <input
           type="checkbox"
@@ -332,30 +270,6 @@ function AssignmentForm({
 
       {due && (
         <div className="space-y-3 rounded-2xl bg-lavender-50/60 p-3">
-          <label className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-soft">
-            Entregas tardías
-            <select
-              value={lateMode}
-              onChange={(e) => setLateMode(e.target.value as "accept" | "until" | "closed")}
-              className="rounded-full border border-lavender-100 bg-white px-3 py-1.5 text-sm text-ink focus:outline-none focus:ring-4 focus:ring-lavender-100"
-            >
-              <option value="accept">Se aceptan y quedan marcadas como tardías</option>
-              <option value="until">Se aceptan hasta una fecha de cierre</option>
-              <option value="closed">No se aceptan después de la fecha límite</option>
-            </select>
-          </label>
-          {lateMode === "until" && (
-            <label className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-soft">
-              Cierre definitivo
-              <input
-                type="datetime-local"
-                value={lateUntil}
-                min={due}
-                onChange={(e) => setLateUntil(e.target.value)}
-                className="rounded-full border border-lavender-100 bg-white px-3 py-1.5 text-sm text-ink focus:outline-none focus:ring-4 focus:ring-lavender-100"
-              />
-            </label>
-          )}
           {lateMode !== "closed" && (
             <label className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-soft">
               Penalización sugerida por día de retraso
@@ -439,11 +353,11 @@ function AssignmentForm({
       <div className="flex flex-wrap gap-2">
         <button
           type="submit"
-          disabled={busy || title.trim().length < 2 || !statement.trim() || (!!due && !!policyError) || (evaluation && !due) || !!testsError || !!criteriaError}
+          disabled={busy || !!policyError || !!testsError || !!criteriaError}
           className="rounded-full bg-lavender-600 px-5 py-2.5 text-sm font-bold text-white shadow-soft transition
             hover:bg-lavender-700 disabled:opacity-40"
         >
-          {busy ? (initial ? "Guardando..." : "Publicando...") : initial ? "Guardar cambios" : "Publicar taller"}
+          {busy ? "Guardando..." : "Guardar cambios"}
         </button>
         {onCancel && (
           <button
@@ -459,73 +373,27 @@ function AssignmentForm({
   );
 }
 
-/** Talleres de una clase: crearlos y ver los publicados. */
+/** Talleres de una clase (carpetas de entrega de Brightspace): completar lo propio de EduTrace. */
 export default function TeacherAssignments({
-  groupId,
   assignments,
   submissionCounts,
-  onCreated,
   onUpdated,
-  onDeleted,
 }: {
-  groupId: string;
   assignments: Assignment[];
   submissionCounts: Map<string, number>;
-  onCreated: (a: Assignment) => void;
   onUpdated: (a: Assignment) => void;
-  onDeleted: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const remove = async (a: Assignment) => {
-    if (
-      !window.confirm(
-        `¿Eliminar el taller «${a.title}»? Se borrarán sus archivos. Las entregas que respondían a él se conservan como práctica libre.`
-      )
-    )
-      return;
-    setError(null);
-    try {
-      await deleteAssignment(a.id);
-      onDeleted(a.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo eliminar el taller");
-    }
-  };
 
   return (
     <Card
       title="Talleres"
       className="rise-in"
-      action={
-        <button
-          onClick={() => setOpen((o) => !o)}
-          className="rounded-full bg-lavender-100 px-4 py-1.5 text-sm font-bold text-lavender-700 transition hover:bg-lavender-200"
-        >
-          {open ? "Cancelar" : "Nuevo taller"}
-        </button>
-      }
     >
-      {open && (
-        <div className="mb-5 rounded-3xl border border-lavender-100 p-4">
-          <AssignmentForm
-            groupId={groupId}
-            onSaved={(a) => {
-              setOpen(false);
-              onCreated(a);
-            }}
-          />
-        </div>
-      )}
-
-      {error && <p className="mb-3 rounded-2xl bg-peach-50 px-4 py-2 text-sm font-semibold text-peach-700">{error}</p>}
-
       {assignments.length === 0 ? (
         <p className="text-sm text-ink-soft">
-          Aún no hay talleres en esta clase. Crea uno con su enunciado y, si quieres, archivos de apoyo: tus
-          estudiantes lo verán al entrar al compilador y la IA usará el enunciado al darles retroalimentación.
+          Aún no hay talleres en esta clase. Los talleres se crean en Brightspace (como carpetas de entrega) y aparecen aquí
+          solos; luego puedes agregarles casos de prueba, criterios y archivos de apoyo.
         </p>
       ) : (
         <ul className="space-y-3">
@@ -533,7 +401,6 @@ export default function TeacherAssignments({
             editing === a.id ? (
               <li key={a.id} className="rounded-3xl border border-lavender-100 p-4">
                 <AssignmentForm
-                  groupId={groupId}
                   initial={a}
                   onCancel={() => setEditing(null)}
                   onSaved={(updated) => {
@@ -605,10 +472,7 @@ export default function TeacherAssignments({
                     </ul>
                   )}
                   <div className="flex flex-wrap gap-1 border-t border-lavender-100 pt-2">
-                    <SmallButton onClick={() => setEditing(a.id)}>Editar taller</SmallButton>
-                    <SmallButton tone="danger" onClick={() => remove(a)}>
-                      Eliminar taller
-                    </SmallButton>
+                    <SmallButton onClick={() => setEditing(a.id)}>Completar taller</SmallButton>
                   </div>
                 </div>
               </details>

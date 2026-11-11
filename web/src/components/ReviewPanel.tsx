@@ -344,6 +344,17 @@ export default function ReviewPanel({
           >
             {returned ? "Aprobada y devuelta" : "Pendiente de revisión"}
           </span>
+          {returned && review.brightspace_published && (
+            <span className="rounded-full bg-lavender-100 px-2.5 py-0.5 text-[11px] font-bold text-lavender-700">Publicada en Brightspace</span>
+          )}
+          {returned && review.brightspace_published === false && (
+            <span
+              title={review.brightspace_error}
+              className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-800"
+            >
+              Aún no publicada en Brightspace
+            </span>
+          )}
         </h4>
         <button
           onClick={draft}
@@ -584,6 +595,7 @@ export default function ReviewPanel({
 
       <p className="text-xs text-ink-faint empty:hidden">
         {returned && review.returned_at && `Aprobada y devuelta al estudiante el ${formatDateTime(review.returned_at)}. `}
+        {returned && review.brightspace_published && review.brightspace_published_at && `Publicada en Brightspace el ${formatDateTime(review.brightspace_published_at)}. `}
         {review.review_ms > 0 && `Tiempo de revisión registrado: ${minutes(review.review_ms)}. `}
         {review.grade_source === "ai_confirmed" && "Nota de la IA confirmada por ti."}
         {review.grade_source === "profesor" &&

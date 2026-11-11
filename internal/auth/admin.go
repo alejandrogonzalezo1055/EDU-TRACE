@@ -14,7 +14,7 @@ import (
 const MaxAssignmentFiles = 10
 
 var (
-	ErrMonitorNotFound = errors.New("no hay una cuenta de monitor con ese email")
+	ErrMonitorNotFound = errors.New("no hay una cuenta de estudiante o monitor con ese email; la persona debe haber entrado antes a EduTrace")
 	ErrStudentOfCourse = errors.New("esa persona está inscrita como estudiante en esta materia, así que no puede ser monitor de ella")
 	ErrTooManyFiles = fmt.Errorf("máximo %d archivos por taller", MaxAssignmentFiles)
 )
@@ -199,7 +199,7 @@ func (s *Store) AddMonitor(teacherID, groupID, email string) (*GroupMonitor, err
 		return nil, err
 	}
 	m := &GroupMonitor{}
-	err := s.db.QueryRow(`SELECT id, name, email FROM users WHERE email = ? AND role = 'monitor'`,
+	err := s.db.QueryRow(`SELECT id, name, email FROM users WHERE email = ? AND role IN ('student', 'monitor')`,
 		normalizeEmail(email)).Scan(&m.ID, &m.Name, &m.Email)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrMonitorNotFound
@@ -211,17 +211,28 @@ func (s *Store) AddMonitor(teacherID, groupID, email string) (*GroupMonitor, err
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM group_students gs
 		JOIN class_groups sg ON sg.id = gs.group_id
 		JOIN class_groups g ON g.course_id = sg.course_id
-		WHERE g.id = ? AND gs.student_id = ?`, groupID, m.ID).Scan(&enrolled); err != nil {
+		WHERE g.id = ? AND gs.student_id = ? AND gs.active = 1`, groupID, m.ID).Scan(&enrolled); err != nil {
 		return nil, err
 	}
 	if enrolled > 0 {
 		return nil, ErrStudentOfCourse
 	}
-	if _, err := s.db.Exec(`INSERT INTO group_monitors (group_id, monitor_id, added_at) VALUES (?, ?, ?)
+	// Los monitores son locales (no vienen de Brightspace): el docente elige a un estudiante ya
+	// registrado y su perfil pasa a monitor. El perfil principal que calcula la sincronización
+	// conserva 'monitor' mientras la persona siga en group_monitors.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO group_monitors (group_id, monitor_id, added_at) VALUES (?, ?, ?)
 		ON CONFLICT DO NOTHING`, groupID, m.ID, fmtTime(time.Now())); err != nil {
 		return nil, err
 	}
-	return m, nil
+	if _, err := tx.Exec(`UPDATE users SET role = 'monitor' WHERE id = ? AND role = 'student'`, m.ID); err != nil {
+		return nil, err
+	}
+	return m, tx.Commit()
 }
 
 func (s *Store) RemoveMonitor(teacherID, groupID, monitorID string) error {
@@ -265,6 +276,18 @@ func (s *Store) ownedAssignment(q querier, teacherID, assignmentID string) error
 }
 
 func (s *Store) UpdateAssignment(teacherID, assignmentID, title, statement, rubric string, dueAt *time.Time, policy AssignmentPolicy, removeFiles []string, files []FileUpload) (*Assignment, error) {
+	// En un taller espejado de Brightspace, título, enunciado y plazos son de solo lectura:
+	// se conservan los valores guardados y solo cambian lo que es de EduTrace (rubric, penalización,
+	// modo evaluación, adjuntos; los casos y criterios se guardan aparte).
+	if cur, err := s.mirroredAssignment(assignmentID); err != nil {
+		return nil, err
+	} else if cur != nil {
+		title, statement, dueAt = cur.Title, cur.Statement, cur.DueAt
+		policy.AllowLate, policy.LateUntil = cur.AllowLate, cur.LateUntil
+		if dueAt == nil || !policy.AllowLate {
+			policy.LatePenalty = nil
+		}
+	}
 	if err := policy.validate(dueAt); err != nil {
 		return nil, err
 	}

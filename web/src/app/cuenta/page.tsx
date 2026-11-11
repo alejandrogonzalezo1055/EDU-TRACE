@@ -5,169 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import RequireAuth from "@/components/RequireAuth";
 import AppShell from "@/components/AppShell";
-import RecoveryCodeDialog from "@/components/RecoveryCodeDialog";
 import { Avatar, Card } from "@/components/ui";
 import { useAuth } from "@/components/AuthProvider";
-import {
-  changePassword,
-  deleteAccount,
-  exportMyData,
-  getNotifications,
-  newRecoveryCode,
-  setEmailNotifications,
-  updateProfile,
-} from "@/lib/api";
+import { deleteAccount, exportMyData, getNotifications, setEmailNotifications } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { ROLE_LABELS } from "@/lib/role";
-
-const inputClass =
-  "w-full rounded-2xl border border-lavender-100 bg-lavender-50/60 px-4 py-2.5 text-sm placeholder-ink-faint " +
-  "focus:border-lavender-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-lavender-100";
-
-function PasswordForm() {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (next !== confirm) {
-      setMessage({ ok: false, text: "Las dos contraseñas nuevas no coinciden" });
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      await changePassword(current, next);
-      setCurrent("");
-      setNext("");
-      setConfirm("");
-      setMessage({ ok: true, text: "Contraseña actualizada. Se cerró la sesión en tus otros dispositivos." });
-    } catch (err) {
-      setMessage({ ok: false, text: err instanceof Error ? err.message : "No se pudo cambiar la contraseña" });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form onSubmit={submit} className="space-y-3">
-      <input
-        type="password"
-        required
-        autoComplete="current-password"
-        placeholder="Contraseña actual"
-        value={current}
-        onChange={(e) => setCurrent(e.target.value)}
-        className={inputClass}
-      />
-      <input
-        type="password"
-        required
-        minLength={8}
-        maxLength={128}
-        autoComplete="new-password"
-        placeholder="Nueva contraseña (mín. 8 caracteres)"
-        value={next}
-        onChange={(e) => setNext(e.target.value)}
-        className={inputClass}
-      />
-      <input
-        type="password"
-        required
-        minLength={8}
-        maxLength={128}
-        autoComplete="new-password"
-        placeholder="Repite la nueva contraseña"
-        value={confirm}
-        onChange={(e) => setConfirm(e.target.value)}
-        className={inputClass}
-      />
-      {message && (
-        <p className={`rounded-2xl px-4 py-2 text-sm font-semibold ${message.ok ? "bg-mint-50 text-mint-700" : "bg-peach-50 text-peach-700"}`}>
-          {message.text}
-        </p>
-      )}
-      <button
-        type="submit"
-        disabled={busy}
-        className="rounded-full bg-lavender-600 px-5 py-2.5 text-sm font-bold text-white shadow-soft transition hover:bg-lavender-700 disabled:opacity-40"
-      >
-        {busy ? "Guardando..." : "Cambiar contraseña"}
-      </button>
-    </form>
-  );
-}
-
-function RecoverySection() {
-  const { user, setUser } = useAuth();
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
-
-  if (!user) return null;
-
-  const generate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const { recovery_code } = await newRecoveryCode(password);
-      setPassword("");
-      setCode(recovery_code);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo generar el código");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      {user.has_recovery ? (
-        <p className="rounded-2xl bg-mint-50 px-4 py-2 text-sm font-semibold text-mint-700">
-          Ya tienes un código de recuperación activo. Guárdalo bien. Si lo perdiste, puedes generar uno nuevo, pero ten en cuenta que el anterior dejará de funcionar.
-        </p>
-      ) : (
-        <p className="rounded-2xl bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800">
-          Aún no tienes código de recuperación. Sin él no podrás recuperar tu cuenta si olvidas la contraseña.
-        </p>
-      )}
-      <form onSubmit={generate} className="flex flex-wrap gap-2">
-        <input
-          type="password"
-          required
-          autoComplete="current-password"
-          placeholder="Confirma con tu contraseña"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className={`${inputClass} min-w-0 flex-1`}
-        />
-        <button
-          type="submit"
-          disabled={busy || !password}
-          className="shrink-0 rounded-full bg-lavender-100 px-5 py-2.5 text-sm font-bold text-lavender-700 transition hover:bg-lavender-200 disabled:opacity-40"
-        >
-          {busy ? "Generando..." : user.has_recovery ? "Generar uno nuevo" : "Generar código"}
-        </button>
-      </form>
-      {error && <p className="rounded-2xl bg-peach-50 px-4 py-2 text-sm font-semibold text-peach-700">{error}</p>}
-      {code && (
-        <RecoveryCodeDialog
-          code={code}
-          email={user.email}
-          onDone={() => {
-            setCode(null);
-            setUser({ ...user, has_recovery: true });
-          }}
-        />
-      )}
-    </div>
-  );
-}
 
 function EmailNotices() {
   const [state, setState] = useState<{ email: boolean; available: boolean } | null>(null);
@@ -225,15 +67,13 @@ function EmailNotices() {
 function MyData() {
   const { user, setUser } = useAuth();
   const router = useRouter();
-  const [name, setName] = useState(user?.name ?? "");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState<"name" | "export" | "delete" | null>(null);
+  const [busy, setBusy] = useState<"export" | "delete" | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirming, setConfirming] = useState(false);
 
   if (!user) return null;
 
-  const run = async (kind: "name" | "export" | "delete", action: () => Promise<string | null>) => {
+  const run = async (kind: "export" | "delete", action: () => Promise<string | null>) => {
     setBusy(kind);
     setMessage(null);
     try {
@@ -244,14 +84,6 @@ function MyData() {
     } finally {
       setBusy(null);
     }
-  };
-
-  const saveName = (e: React.FormEvent) => {
-    e.preventDefault();
-    run("name", async () => {
-      setUser(await updateProfile(name.trim()));
-      return "Nombre actualizado.";
-    });
   };
 
   const download = () =>
@@ -269,7 +101,7 @@ function MyData() {
   const remove = (e: React.FormEvent) => {
     e.preventDefault();
     run("delete", async () => {
-      await deleteAccount(password);
+      await deleteAccount();
       setUser(null);
       router.replace("/login");
       return null;
@@ -288,24 +120,9 @@ function MyData() {
         </Link>
         .
       </p>
-      <form onSubmit={saveName} className="flex flex-wrap gap-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          minLength={2}
-          maxLength={80}
-          required
-          aria-label="Tu nombre"
-          className={`${inputClass} min-w-0 flex-1`}
-        />
-        <button
-          type="submit"
-          disabled={busy !== null || name.trim() === user.name || name.trim().length < 2}
-          className="shrink-0 rounded-full bg-lavender-100 px-5 py-2.5 text-sm font-bold text-lavender-700 transition hover:bg-lavender-200 disabled:opacity-40"
-        >
-          {busy === "name" ? "Guardando..." : "Corregir nombre"}
-        </button>
-      </form>
+      <p className="text-sm text-ink-soft">
+        Tu nombre y tu correo vienen de Brightspace. Si hay un error, corrígelo allá y EduTrace lo actualizará la próxima vez que entres.
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={download}
@@ -321,7 +138,6 @@ function MyData() {
           <div className="flex flex-wrap items-center gap-3">
             <p className="min-w-0 flex-1 text-sm text-ink-soft">
               Eliminar tu cuenta borra tus entregas, intentos, revisiones y registros. No se puede deshacer.
-              {user.role === "teacher" && " Si eres profesor, primero debes eliminar tus materias."}
             </p>
             <button
               onClick={() => setConfirming(true)}
@@ -332,20 +148,11 @@ function MyData() {
           </div>
         ) : (
           <form onSubmit={remove} className="space-y-2">
-            <p className="text-sm font-bold text-peach-700">Confirma con tu contraseña para eliminar tu cuenta y todos tus datos.</p>
+            <p className="text-sm font-bold text-peach-700">Confirma para eliminar tu cuenta de EduTrace y todos tus datos. Tu cuenta de Brightspace no se toca.</p>
             <div className="flex flex-wrap gap-2">
-              <input
-                type="password"
-                required
-                autoComplete="current-password"
-                placeholder="Tu contraseña"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={`${inputClass} min-w-0 flex-1`}
-              />
               <button
                 type="submit"
-                disabled={busy !== null || !password}
+                disabled={busy !== null}
                 className="shrink-0 rounded-full bg-peach-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-peach-700 disabled:opacity-40"
               >
                 {busy === "delete" ? "Eliminando..." : "Eliminar definitivamente"}
@@ -383,14 +190,10 @@ function AccountView() {
           </p>
         </div>
       </section>
-      <Card title="Cambiar contraseña" className="rise-in">
-        <PasswordForm />
-      </Card>
-      <Card title="Código de recuperación" className="rise-in">
-        <p className="mb-3 text-sm text-ink-soft">
-          Si algún día olvidas tu contraseña, ve a la pantalla de inicio y selecciona «¿Olvidaste tu contraseña?». Allí podrás crear una nueva usando tu correo electrónico y este código de recuperación. Recuerda que cada código solo se puede utilizar una vez.
+      <Card title="Contraseña" className="rise-in">
+        <p className="text-sm text-ink-soft">
+          EduTrace no guarda contraseñas: entras con Brightspace. Para cambiarla, hazlo directamente en Brightspace.
         </p>
-        <RecoverySection />
       </Card>
       <Card title="Avisos" className="rise-in scroll-mt-24" id="avisos">
         <EmailNotices />

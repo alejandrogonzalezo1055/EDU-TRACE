@@ -159,8 +159,11 @@ func TestMonitorRole(t *testing.T) {
 	if _, err := s.GroupForMonitor(moni.ID, g.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ve la clase sin estar asignado: %v", err)
 	}
-	if _, err := s.AddMonitor(prof.ID, g.ID, "ana@u.edu"); !errors.Is(err, ErrMonitorNotFound) {
-		t.Fatalf("se agregó un estudiante como monitor: %v", err)
+	if _, err := s.AddMonitor(prof.ID, g.ID, "ana@u.edu"); !errors.Is(err, ErrStudentOfCourse) {
+		t.Fatalf("se agregó como monitor a una estudiante de la misma materia: %v", err)
+	}
+	if _, err := s.AddMonitor(prof.ID, g.ID, "nadie@u.edu"); !errors.Is(err, ErrMonitorNotFound) {
+		t.Fatalf("se agregó un correo inexistente como monitor: %v", err)
 	}
 	if _, err := s.AddMonitor(otro.ID, g.ID, "moni@u.edu"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("otro profesor agregó monitor: %v", err)

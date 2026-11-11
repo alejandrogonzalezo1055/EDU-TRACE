@@ -25,7 +25,27 @@ fi
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-8080}"
 export SANDBOX="${SANDBOX:-bwrap}"
-export TEACHER_CODE="${TEACHER_CODE:-admin123}"
+# Clave Python → Go de /internal/v1/*: si no hay una en el entorno o en .env se genera una por instalación
+# y se guarda en data/ (ignorada por git, solo el dueño la lee). El script de datos de prueba la lee de ahí.
+if [ -z "$INTERNAL_API_KEY" ]; then
+    KEY_FILE="${DATA_DIR:-data}/internal_api_key"
+    if [ ! -s "$KEY_FILE" ]; then
+        mkdir -p "$(dirname "$KEY_FILE")"
+        (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$KEY_FILE")
+    fi
+    export INTERNAL_API_KEY="$(cat "$KEY_FILE")"
+fi
+# Con HTTPS (o con PYTHON_API_KEY / PYTHON_BASE_URL) Go exige COOKIE_JAR_KEY (AES-256 en base64): misma idea, guardada en data/.
+if [ -z "$COOKIE_JAR_KEY" ] && { [ -n "$TLS_CERT_FILE" ] || [ -n "$PYTHON_API_KEY" ] || [ -n "$PYTHON_BASE_URL" ]; }; then
+    JAR_FILE="${DATA_DIR:-data}/cookie_jar_key"
+    if [ ! -s "$JAR_FILE" ]; then
+        mkdir -p "$(dirname "$JAR_FILE")"
+        (umask 077; head -c 32 /dev/urandom | base64 > "$JAR_FILE")
+    fi
+    export COOKIE_JAR_KEY="$(cat "$JAR_FILE")"
+fi
+# Esquema con el que se habla con Go: HTTPS si Go sirve TLS por sí mismo (certificado con mkcert, -k lo acepta).
+if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then API_SCHEME="https"; CURL_TLS="-k"; else API_SCHEME="http"; CURL_TLS=""; fi
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 export OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 WEB_PORT="${WEB_PORT:-3000}"
@@ -181,8 +201,8 @@ trap cleanup SIGINT SIGTERM EXIT
 ./bin/server &
 BACKEND_PID=$!
 for i in {1..20}; do
-    if curl -s "http://$HOST:$PORT/api/health" &> /dev/null; then
-        echo -e "${GREEN}✓ Backend en http://$HOST:$PORT${NC}"
+    if curl -s $CURL_TLS "$API_SCHEME://$HOST:$PORT/api/health" &> /dev/null; then
+        echo -e "${GREEN}✓ Backend en $API_SCHEME://$HOST:$PORT${NC}"
         break
     fi
     if ! kill -0 "$BACKEND_PID" 2> /dev/null; then
@@ -192,11 +212,11 @@ for i in {1..20}; do
     sleep 1
 done
 
-(cd web && NEXT_PUBLIC_API_URL="http://localhost:$PORT" npm run dev -- -p "$WEB_PORT") &
+(cd web && NEXT_PUBLIC_API_URL="$API_SCHEME://localhost:$PORT" npm run dev -- -p "$WEB_PORT") &
 
 echo -e "\n${GREEN}Edutrace inicializado!!${NC}"
 echo -e "${GREEN}Abre en tu navegador: http://localhost:$WEB_PORT${NC}"
-echo -e "Backend: http://$HOST:$PORT · Ollama: $OLLAMA_BASE_URL ($MODEL_TAG) · Sandbox: $SANDBOX"
+echo -e "Backend: $API_SCHEME://$HOST:$PORT · Ollama: $OLLAMA_BASE_URL ($MODEL_TAG) · Sandbox: $SANDBOX"
 echo -e "Presiona Ctrl+C para detener todo."
 
 wait

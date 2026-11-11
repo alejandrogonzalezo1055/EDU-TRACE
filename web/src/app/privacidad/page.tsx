@@ -46,7 +46,7 @@ export default function PrivacyPage() {
 
         <Section title="Qué datos tratamos">
           <ul className="list-disc space-y-1 pl-5">
-            <li>De tu cuenta: nombre, email, rol y la fecha en que autorizaste el tratamiento. La contraseña y el código de recuperación se guardan cifrados con un hash; nadie puede leerlos.</li>
+            <li>De tu cuenta: nombre, email, rol y la fecha en que autorizaste el tratamiento. Tu identidad la verifica Brightspace: EduTrace no guarda tu contraseña de Brightspace.</li>
             <li>De tu trabajo: el código que compilas y envías, la entrada y la salida de tus programas, los mensajes del compilador y el resultado de los casos de prueba.</li>
             <li>De tu proceso: la retroalimentación que recibes, la revisión y la nota de tu profesor, los comentarios y marcas de los monitores, tus preguntas sobre la retroalimentación con sus respuestas, si dijiste haberla entendido y el registro de quién revisó y aprobó cada retroalimentación. Tu profesor ve las respuestas a «¿Entendiste esta retroalimentación?» resumidas y sin tu nombre.</li>
             <li>De uso: cuántas veces compilas o pides retroalimentación, tu última actividad y cuánto tarda la IA en responder. Estos tiempos se guardan sin tu nombre.</li>
@@ -88,7 +88,7 @@ export default function PrivacyPage() {
           <p>Según el artículo 8 de la Ley 1581 de 2012 puedes:</p>
           <ul className="list-disc space-y-1 pl-5">
             <li>Conocer y descargar tus datos: «Mi cuenta» → «Descargar mis datos».</li>
-            <li>Actualizar y rectificar tu nombre: «Mi cuenta» → «Mis datos».</li>
+            <li>Rectificar tu nombre o tu correo: se corrigen en Brightspace y EduTrace los toma la próxima vez que entres.</li>
             <li>Revocar la autorización y pedir la supresión: «Mi cuenta» → «Eliminar mi cuenta». Se borran tu cuenta, tus entregas, revisiones y registros asociados.</li>
             <li>Pedir prueba de tu autorización, preguntar cómo se usan tus datos y presentar quejas ante la Superintendencia de Industria y Comercio.</li>
           </ul>
@@ -104,11 +104,7 @@ export default function PrivacyPage() {
             <li>Si tu cuenta queda sin clases y sin actividad durante ese mismo plazo, también se borra.</li>
             <li>Los avisos se borran a los 90 días y los tiempos de la IA, que no tienen tu nombre, al año.</li>
             <li>
-              Si olvidas tu contraseña y no tienes tu código de recuperación, tu profesor puede generarte un código de un solo uso que
-              vence en 24 horas. Recibirás un aviso cada vez que lo haga.
-            </li>
-            <li>
-              Las contraseñas se guardan con hash, la conexión va cifrada (HTTPS), la sesión usa una cookie que el navegador no expone a
+              No guardamos contraseñas, la conexión va cifrada (HTTPS), la sesión usa una cookie que el navegador no expone a
               scripts, el código de los estudiantes se ejecuta en un entorno aislado sin red y con límites de procesos, memoria y disco,
               y cada consulta comprueba en la base de datos que tengas permiso para ver lo que pides.
             </li>

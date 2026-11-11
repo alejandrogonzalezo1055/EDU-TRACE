@@ -50,7 +50,7 @@ export interface FeedbackMeta {
   time_ms: number;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8080";
 export type Role = "student" | "teacher" | "monitor";
 
 export interface Activity {
@@ -65,17 +65,15 @@ export interface User {
   email: string;
   role: Role;
   activity: Activity;
-  has_recovery?: boolean;
+  /** ID del usuario en Brightspace (p. ej. "d2l:user:3101"); puede no venir. */
+  external_id?: string;
   consent_at?: string;
   consent_outdated?: boolean;
 }
 
-export type SessionUser = User & { recovery_code?: string };
-
 export interface GroupSummary {
   id: string;
   name: string;
-  join_code: string;
   student_count: number;
   submission_count: number;
   ai_mode: AIMode;
@@ -147,7 +145,6 @@ export interface GroupMonitor {
 export interface GroupDetail {
   id: string;
   name: string;
-  join_code: string;
   course_id: string;
   course_name: string;
   students: GroupStudent[];
@@ -182,8 +179,13 @@ export interface ReviewState {
   grade?: number;
 }
 
+/** Estado del envío oficial a Brightspace (contrato §8). El campo puede no venir todavía. */
+export type BrightspaceStatus = "pendiente" | "enviada" | "fallida";
+
 export interface SubmissionMeta {
   id: string;
+  brightspace_status?: BrightspaceStatus;
+  brightspace_error?: string;
   kind: SubmissionKind;
   error_summary?: string;
   group_id: string;
@@ -364,6 +366,10 @@ export interface Review {
   grade?: number;
   status: "draft" | "returned";
   returned_at?: string;
+  /** Nota y texto publicados en Brightspace (contrato §5.2). Opcional hasta que Go lo exponga. */
+  brightspace_published?: boolean;
+  brightspace_published_at?: string;
+  brightspace_error?: string;
   grade_source: "ai_confirmed"|"profesor" |"";
   raes: ReviewRAE[];
   ai_discarded_at?: string;
@@ -410,6 +416,7 @@ export interface ReviewRAE {
 }
 
 export interface StudentReview {
+  brightspace_published?: boolean;
   feedback: string;
   grade?: number;
   returned_at: string;
@@ -464,39 +471,7 @@ export async function getMe(): Promise<User | null> {
   return response.json();
 }
 
-export function login(email: string, password: string, role: Role): Promise<SessionUser> {
-  return postJSON("/api/auth/login", { email, password, role });
-}
-
-export function register(data: {
-  name: string;
-  email: string;
-  password: string;
-  role: Role;
-  teacher_code?: string;
-  consent: boolean;
-}): Promise<SessionUser> {
-  return postJSON("/api/auth/register", data);
-}
-
-export function recoverAccount(email: string, recoveryCode: string, newPassword: string): Promise<SessionUser> {
-  return postJSON("/api/auth/recover", { email, recovery_code: recoveryCode, new_password: newPassword });
-}
-
-export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const response = await apiFetch("/api/auth/password", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  });
-  if (!response.ok) await throwForStatus(response);
-}
-
-export const newRecoveryCode = (password: string) =>
-  postJSON<{ recovery_code: string }>("/api/auth/recovery-code", { password });
-
 export const recordConsent = () => postJSON<User>("/api/auth/consent", {});
-export const updateProfile = (name: string) => sendJSON<User>("PATCH", "/api/auth/profile", { name });
 
 export async function exportMyData(): Promise<Blob> {
   const response = await apiFetch("/api/auth/export");
@@ -504,11 +479,12 @@ export async function exportMyData(): Promise<Blob> {
   return response.blob();
 }
 
-export async function deleteAccount(password: string): Promise<void> {
+/** Sin contraseña: la identidad es de Brightspace. El cuerpo vacío lo ignora Go si ya no lo exige. */
+export async function deleteAccount(): Promise<void> {
   const response = await apiFetch("/api/auth/delete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({}),
   });
   if (!response.ok) await throwForStatus(response);
 }
@@ -540,21 +516,10 @@ async function deleteReq(path: string): Promise<void> {
 
 const enc = encodeURIComponent;
 
-export const renameCourse = (courseId: string, name: string) =>
-  sendJSON<{ id: string; name: string }>("PATCH", `/api/teacher/courses/${enc(courseId)}`, { name });
-export const deleteCourse = (courseId: string) => deleteReq(`/api/teacher/courses/${enc(courseId)}`);
-export const renameGroup = (groupId: string, name: string) =>
-  sendJSON<{ id: string; name: string }>("PATCH", `/api/teacher/groups/${enc(groupId)}`, { name });
-export const deleteGroup = (groupId: string) => deleteReq(`/api/teacher/groups/${enc(groupId)}`);
-export const regenerateJoinCode = (groupId: string) =>
-  postJSON<{ join_code: string }>(`/api/teacher/groups/${enc(groupId)}/join-code`, {});
-export const removeStudent = (groupId: string, studentId: string) =>
-  deleteReq(`/api/teacher/groups/${enc(groupId)}/students/${enc(studentId)}`);
 export const addMonitor = (groupId: string, email: string) =>
   postJSON<GroupMonitor>(`/api/teacher/groups/${enc(groupId)}/monitors`, { email });
 export const removeMonitor = (groupId: string, monitorId: string) =>
   deleteReq(`/api/teacher/groups/${enc(groupId)}/monitors/${enc(monitorId)}`);
-export const deleteAssignment = (assignmentId: string) => deleteReq(`/api/teacher/assignments/${enc(assignmentId)}`);
 export const createRAE = (courseId: string, code: string, description: string) =>
   postJSON<RAE>(`/api/teacher/courses/${enc(courseId)}/raes`, { code, description });
 export const updateRAE = (raeId: string, code: string, description: string) =>
@@ -572,8 +537,6 @@ export const retryDrafts = (groupId: string) =>
 export const setThresholds = (courseId: string, t: Thresholds) =>
   sendJSON<Thresholds>("PUT", `/api/teacher/courses/${enc(courseId)}/thresholds`, t);
 export const getAIStatus = () => getJSON<AIStatus>("/api/teacher/ai-status");
-export const issueResetCode = (groupId: string, studentId: string) =>
-  postJSON<{ code: string; expires_at: string }>(`/api/teacher/groups/${enc(groupId)}/students/${enc(studentId)}/reset-code`, {});
 export const closeCourse = (courseId: string) =>
   postJSON<{ purge_at?: string }>(`/api/teacher/courses/${enc(courseId)}/close`, {});
 export async function reopenCourse(courseId: string): Promise<void> {
@@ -776,9 +739,6 @@ export const deleteMonitorFeedback = (feedbackId: string) => deleteReq(`/api/mon
 
 // Docente
 export const listCourses = () => getJSON<CourseSummary[]>("/api/teacher/courses");
-export const createCourse = (name: string) => postJSON<CourseSummary>("/api/teacher/courses", { name });
-export const createGroup = (courseId: string, name: string) =>
-  postJSON<GroupSummary>(`/api/teacher/courses/${encodeURIComponent(courseId)}/groups`, { name });
 export const getGroup = (groupId: string) =>
   getJSON<GroupDetail>(`/api/teacher/groups/${encodeURIComponent(groupId)}`);
 export const listGroupSubmissions = (groupId: string, studentId?: string, kind: SubmissionKind | "all" = "official") => {
@@ -829,7 +789,6 @@ export async function saveReview(
 }
 
 export const listMyGroups = () => getJSON<StudentGroup[]>("/api/student/groups");
-export const joinGroup = (code: string) => postJSON<StudentGroup>("/api/student/groups/join", { code });
 export const submitCode = (data: {
   group_id: string;
   assignment_id?: string;
@@ -859,16 +818,6 @@ export const getMySubmission = (id: string) => getJSON<Submission>(`/api/student
 // Talleres
 export const listGroupAssignments = (groupId: string) =>
   getJSON<Assignment[]>(`/api/teacher/groups/${encodeURIComponent(groupId)}/assignments`);
-
-
-export async function createAssignment(groupId: string, form: FormData): Promise<Assignment> {
-  const response = await apiFetch(`/api/teacher/groups/${encodeURIComponent(groupId)}/assignments`, {
-    method: "POST",
-    body: form, 
-  });
-  if (!response.ok) await throwForStatus(response);
-  return response.json();
-}
 
 
 export const assignmentFileUrl = (assignmentId: string, fileId: string) =>
@@ -1004,12 +953,6 @@ export async function streamChat(
   return readSSE(response, onToken);
 }
 
-export const addCoTeacher = (courseId: string, email: string) =>
-  postJSON<CourseTeacher>(`/api/teacher/courses/${enc(courseId)}/teachers`, { email });
-export const removeCoTeacher = (courseId: string, teacherId: string) =>
-  deleteReq(`/api/teacher/courses/${enc(courseId)}/teachers/${enc(teacherId)}`);
-export const cloneCourse = (courseId: string, name: string, closeOld: boolean) =>
-  postJSON<{ id: string }>(`/api/teacher/courses/${enc(courseId)}/clone`, { name, close_old: closeOld });
 
 export interface StudentAlert {
   student_id: string;

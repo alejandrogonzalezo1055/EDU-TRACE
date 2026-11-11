@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listMySubmissions, StudentSubmission } from "@/lib/api";
 import { Card } from "@/components/ui";
-import { AnnotationsPill, MonitorCountPill, ReviewStatusPill, SubmissionFeedback } from "@/components/StudentFeedback";
+import { AnnotationsPill, BrightspacePill, MonitorCountPill, ReviewStatusPill, SubmissionFeedback } from "@/components/StudentFeedback";
 import { TestsPill } from "@/components/TestResults";
 import { formatDateTime } from "@/lib/format";
 import { LatePill } from "@/components/Deadline";
@@ -50,6 +50,7 @@ export default function MySubmissions({ refreshKey }: { refreshKey: number }) {
                 <LatePill meta={s} />
                 <AnnotationsPill item={s} />
                 <MonitorCountPill item={s} />
+                <BrightspacePill meta={s} />
                 <ReviewStatusPill item={s} />
               </button>
               {open && (
