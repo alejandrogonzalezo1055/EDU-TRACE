@@ -12,7 +12,10 @@ cd "$SCRIPT_DIR"
 
 # 0. Configuración y puertos
 if [ -f .env ]; then
-    while IFS='=' read -r key value || [ -n "$key" ]; do
+    while IFS= read -r line || [ -n "$line" ]; do
+        key="${line%%=*}"
+        value="${line#*=}"
+        [[ "$line" == *=* ]] || continue
         [[ "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
         value="${value%$'\r'}"
         value="${value#\"}"; value="${value%\"}"
@@ -192,6 +195,7 @@ go build -o bin/server ./cmd/server
 echo -e "${GREEN} Backend compilado en bin/server${NC}"
 
 cleanup() {
+    trap - SIGINT SIGTERM EXIT
     echo -e "\n${YELLOW}Deteniendo servicios${NC}"
     kill 0 2>/dev/null || true
     exit 0

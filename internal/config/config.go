@@ -48,6 +48,10 @@ type Config struct {
 	PythonAPIKey string // clave Go → Python (Authorization: Bearer en el cliente pyclient)
 	PythonBaseURL string // URL https del servicio Python; vacía = Go no llama a Python (sin estado Brightspace)
 	PythonCAFile string // PEM opcional (CA de mkcert) que se suma al almacén del sistema para confiar en Python
+	// TEMPORAL: mientras Python no implemente dropbox/submit y dropbox/feedback, la cola hacia Brightspace
+	// NO envía nada a Python. Las entregas y revisiones se siguen encolando en la base como 'pendiente'
+	// (no se pierde nada). Por defecto está pausada; D2L_QUEUE_PAUSED=false reactiva el envío.
+	D2LQueuePaused bool
 	PythonAllowHTTP bool // solo desarrollo: permite PYTHON_BASE_URL con http:// (las cookies de usuario nunca viajan por http)
 	RosterMaxDeactivatePercent int // la lista de clase no puede desactivar a más de este % de los inscritos
 	TLSCertFile string
@@ -110,6 +114,7 @@ func Load() *Config {
 		PythonAPIKey: os.Getenv("PYTHON_API_KEY"),
 		PythonBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("PYTHON_BASE_URL")), "/"),
 		PythonCAFile: os.Getenv("PYTHON_CA_FILE"),
+		D2LQueuePaused: os.Getenv("D2L_QUEUE_PAUSED") != "false", // TEMPORAL: pausada salvo que se ponga "false"
 		PythonAllowHTTP: os.Getenv("PYTHON_ALLOW_HTTP") == "true",
 		RosterMaxDeactivatePercent: intOrDefault("ROSTER_MAX_DEACTIVATE_PERCENT", 30),
 		TLSCertFile: os.Getenv("TLS_CERT_FILE"),

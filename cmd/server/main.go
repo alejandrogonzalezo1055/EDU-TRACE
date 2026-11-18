@@ -89,7 +89,14 @@ func main() {
 	go drafts.Run(workerCtx)
 	mailCfg := mail.Config{Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword, From: cfg.SMTPFrom}
 	go handler.NewMailer(store, mailCfg, cfg.PublicURL).Run(workerCtx)
-	go handler.NewD2LQueue(store, pyClient).Run(workerCtx)
+	// TEMPORAL: con la cola pausada el trabajador no arranca, así que nada se envía a Python. Los envíos
+	// siguen guardándose como 'pendiente' en la base (SetD2LEnabled sigue activo) y se enviarán cuando se
+	// ponga D2L_QUEUE_PAUSED=false.
+	if pyClient != nil && cfg.D2LQueuePaused {
+		slog.Warn("cola hacia Brightspace PAUSADA (D2L_QUEUE_PAUSED): las entregas y revisiones quedan pendientes en la base y no se envían a Python")
+	} else {
+		go handler.NewD2LQueue(store, pyClient).Run(workerCtx)
+	}
 	if cfg.RetentionDays > 0 {
 		go purgeLoop(workerCtx, store)
 	} else {
