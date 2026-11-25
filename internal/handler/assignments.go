@@ -19,7 +19,7 @@ import (
 
 const (
 	maxAssignmentFiles = auth.MaxAssignmentFiles
-	maxAssignmentFileSize = 10 << 20
+	maxAssignmentFileSize = auth.MaxAssignmentFileSize
 	maxAssignmentUpload = 30 << 20
 	maxStatementLen = 20000
 	maxRubricLen = 5000

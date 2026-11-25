@@ -45,6 +45,7 @@ func (h *InternalHandler) Handler() http.Handler {
 	mux.HandleFunc("PUT /internal/v1/users/{external_id}/enrollments", h.PutEnrollments)
 	mux.HandleFunc("PUT /internal/v1/courses/{external_id}/roster", h.PutRoster)
 	mux.HandleFunc("PUT /internal/v1/courses/{external_id}/assignments", h.PutAssignments)
+	mux.HandleFunc("PUT /internal/v1/courses/{external_id}/assignments/{folder}/files/{file_id}", h.PutAssignmentFile)
 	mux.HandleFunc("POST /internal/v1/session-tickets", h.IssueTicket)
 	mux.HandleFunc("POST /internal/v1/sessions/revoke", h.RevokeSessions)
 	var next http.Handler = mux
@@ -96,6 +97,12 @@ func storeFailure(w http.ResponseWriter, err error, doing string) {
 		status, code = http.StatusNotFound, "usuario_no_encontrado"
 	case errors.Is(err, auth.ErrUnknownCourse):
 		status, code = http.StatusNotFound, "curso_no_encontrado"
+	case errors.Is(err, auth.ErrUnknownAssignment):
+		status, code = http.StatusNotFound, "taller_no_encontrado"
+	case errors.Is(err, auth.ErrFileTooLarge):
+		status, code = http.StatusRequestEntityTooLarge, "archivo_muy_grande"
+	case errors.Is(err, auth.ErrTooManyFiles):
+		status, code = http.StatusUnprocessableEntity, "demasiados_archivos"
 	case errors.Is(err, auth.ErrEmailTakenLocal), errors.Is(err, auth.ErrEmailTakenExternal):
 		status, code = http.StatusConflict, "correo_en_uso"
 	case errors.Is(err, auth.ErrExternalConflict):
@@ -479,6 +486,14 @@ type assignmentEntry struct {
 	// solo si el nombre coincide; por eso hay dos campos).
 	IsHiddenContract bool `json:"is_hidden"`
 	IsHiddenRaw bool `json:"IsHidden"`
+	// Adjuntos de la carpeta en Brightspace (FileId, FileName, Size). Ausente = no se toca nada.
+	Attachments *[]attachmentEntry `json:"Attachments"`
+}
+
+type attachmentEntry struct {
+	FileID json.RawMessage `json:"FileId"`
+	FileName string `json:"FileName"`
+	Size int64 `json:"Size"`
 }
 
 func (h *InternalHandler) PutAssignments(w http.ResponseWriter, r *http.Request) {
@@ -523,6 +538,13 @@ func (h *InternalHandler) PutAssignments(w http.ResponseWriter, r *http.Request)
 				it.GradeItemID = normExt("grade", rawString(e.Assessment.GradeItemID))
 			}
 		}
+		if e.Attachments != nil {
+			list := make([]auth.ExternalAttachment, 0, len(*e.Attachments))
+			for _, a := range *e.Attachments {
+				list = append(list, auth.ExternalAttachment{FileID: rawString(a.FileID), Name: a.FileName, Size: a.Size})
+			}
+			it.Attachments = &list
+		}
 		items = append(items, it)
 	}
 	res, err := h.store.UpsertAssignments(normExt("ou", r.PathValue("external_id")), items)
@@ -532,6 +554,28 @@ func (h *InternalHandler) PutAssignments(w http.ResponseWriter, r *http.Request)
 	}
 	slog.Info("external assignments synced", "course", r.PathValue("external_id"), "created", res.Created, "updated", res.Updated, "hidden", res.Hidden)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// PutAssignmentFile recibe un adjunto de una carpeta de Brightspace: el cuerpo es el archivo tal cual
+// (Content-Type del archivo) y el nombre va en ?name=. Python lo llama por cada elemento de
+// files_needed que devuelve PutAssignments. Es idempotente: el mismo file_id reemplaza el contenido.
+func (h *InternalHandler) PutAssignmentFile(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > auth.MaxAssignmentFileSize {
+		internalError(w, http.StatusRequestEntityTooLarge, "archivo_muy_grande", auth.ErrFileTooLarge.Error())
+		return
+	}
+	// El almacén lee a lo sumo un byte de más para detectar el exceso; este límite es solo una red de seguridad.
+	body := http.MaxBytesReader(w, r.Body, auth.MaxAssignmentFileSize+1)
+	f, err := h.store.SaveExternalAssignmentFile(
+		normExt("ou", r.PathValue("external_id")), normExt("folder", r.PathValue("folder")), r.PathValue("file_id"),
+		r.URL.Query().Get("name"), r.Header.Get("Content-Type"), body, auth.MaxAssignmentFileSize)
+	if err != nil {
+		storeFailure(w, err, "adjunto de taller")
+		return
+	}
+	slog.Info("external assignment file saved", "course", r.PathValue("external_id"), "folder", r.PathValue("folder"),
+		"file_id", r.PathValue("file_id"), "bytes", f.Size)
+	writeJSON(w, http.StatusOK, f)
 }
 
 // ---------- Tickets y sesiones ----------

@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS assignment_files (
   name TEXT NOT NULL,
   size INTEGER NOT NULL,
   content_type TEXT NOT NULL DEFAULT '',
-  position INTEGER NOT NULL
+  position INTEGER NOT NULL,
+  external_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS submissions (

@@ -87,6 +87,7 @@ func TestInternalRequiresKey(t *testing.T) {
 		{"PUT", "/internal/v1/users/d2l:user:1/enrollments"},
 		{"PUT", "/internal/v1/courses/d2l:ou:1/roster"},
 		{"PUT", "/internal/v1/courses/d2l:ou:1/assignments"},
+		{"PUT", "/internal/v1/courses/d2l:ou:1/assignments/d2l:folder:1/files/11"},
 		{"POST", "/internal/v1/session-tickets"},
 		{"POST", "/internal/v1/sessions/revoke"},
 		{"GET", "/internal/v1/no-existe"},
@@ -281,6 +282,100 @@ func TestInternalRosterAndAssignments(t *testing.T) {
 	e.failure("PUT", "/internal/v1/courses/d2l:ou:404/assignments", `{"assignments":[]}`, http.StatusNotFound, "curso_no_encontrado")
 	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments", `{"assignments":[{"external_id":"d2l:folder:9","title":""}]}`, http.StatusBadRequest, "datos_invalidos")
 	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments", `{"nada":1}`, http.StatusBadRequest, "datos_invalidos")
+}
+
+// putFile envía un archivo (cuerpo crudo) a la ruta de adjuntos y devuelve la respuesta.
+func (e *env) putFile(path, contentType, body string) *httptest.ResponseRecorder {
+	e.t.Helper()
+	return e.do("PUT", path, body, "Authorization", "Bearer "+testKey, "Content-Type", contentType)
+}
+
+func TestInternalAssignmentFiles(t *testing.T) {
+	e := newEnv(t)
+	e.call("PUT", "/internal/v1/users/d2l:user:1", `{"name":"Elena Torres","email":"elena@uni.example"}`, http.StatusCreated)
+	e.call("PUT", "/internal/v1/users/d2l:user:1/enrollments", `{"enrollments":[{"course":{"external_id":"d2l:ou:6650","name":"Intro","is_active":true},"role":"teacher"}]}`, http.StatusOK)
+
+	// dropbox/folders crudo con Attachments: Go responde qué archivos le faltan.
+	folders := `[{"Id":701,"Name":"Taller 1","Attachments":[{"FileId":11,"FileName":"Taller_1.pdf","Size":8},{"FileId":12,"FileName":"Datos.txt","Size":3}]},
+		{"Id":702,"Name":"Taller 2"}]`
+	out := e.call("PUT", "/internal/v1/courses/6650/assignments", folders, http.StatusOK)
+	needed, _ := out["files_needed"].([]any)
+	if len(needed) != 2 {
+		t.Fatalf("files_needed: %v", out)
+	}
+	first := needed[0].(map[string]any)
+	if first["folder"] != "d2l:folder:701" || first["file_id"] != "11" || first["name"] != "Taller_1.pdf" || first["size"] != float64(8) {
+		t.Fatalf("primer archivo pedido: %v", first)
+	}
+	// Sin adjuntos que pedir, la lista es [] y no null (Python hace for sobre ella).
+	out = e.call("PUT", "/internal/v1/courses/6650/assignments", `[{"Id":702,"Name":"Taller 2"}]`, http.StatusOK)
+	if got, ok := out["files_needed"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("files_needed debe ser []: %v", out["files_needed"])
+	}
+	out = e.call("PUT", "/internal/v1/courses/6650/assignments", folders, http.StatusOK)
+
+	// Subir el 11 (también con el número crudo de la carpeta, que Go normaliza a d2l:folder:701).
+	rec := e.putFile("/internal/v1/courses/6650/assignments/701/files/11?name=Taller%201%20%C3%A1.pdf", "application/pdf", "%PDF-1.4")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("subida: %d %s", rec.Code, rec.Body)
+	}
+	var saved struct {
+		ID, Name, ContentType string
+		Size int64
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &raw)
+	saved.Name, _ = raw["name"].(string)
+	saved.ContentType, _ = raw["content_type"].(string)
+	size, _ := raw["size"].(float64)
+	if saved.Name != "Taller 1 á.pdf" || saved.ContentType != "application/pdf" || size != 8 || raw["id"] == "" {
+		t.Fatalf("respuesta de la subida: %v", raw)
+	}
+	// Repetir es idempotente y el archivo ya no se pide.
+	if rec := e.putFile("/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/11?name=Taller_1.pdf", "application/pdf", "%PDF-1.4"); rec.Code != http.StatusOK {
+		t.Fatalf("repetir: %d %s", rec.Code, rec.Body)
+	}
+	out = e.call("PUT", "/internal/v1/courses/6650/assignments", folders, http.StatusOK)
+	needed, _ = out["files_needed"].([]any)
+	if len(needed) != 1 || needed[0].(map[string]any)["file_id"] != "12" {
+		t.Fatalf("tras subir el 11 solo falta el 12: %v", out["files_needed"])
+	}
+
+	// El docente de la clase ve el archivo con el nombre pedido.
+	var files []string
+	groups := e.store.TeacherCourses(mustUserID(t, e, "d2l:user:1"))
+	list, err := e.store.GroupAssignments(mustUserID(t, e, "d2l:user:1"), groups[0].Groups[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range list {
+		for _, f := range a.Files {
+			files = append(files, a.Title+":"+f.Name)
+		}
+	}
+	if strings.Join(files, ",") != "Taller 1:Taller_1.pdf" {
+		t.Fatalf("archivos visibles: %v", files)
+	}
+
+	// Errores.
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:404/assignments/d2l:folder:701/files/11", `x`, http.StatusNotFound, "curso_no_encontrado")
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:404/files/11", `x`, http.StatusNotFound, "taller_no_encontrado")
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/11", ``, http.StatusBadRequest, "datos_invalidos")
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/!!", `x`, http.StatusBadRequest, "datos_invalidos")
+	big := strings.Repeat("a", auth.MaxAssignmentFileSize+1)
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/13", big, http.StatusRequestEntityTooLarge, "archivo_muy_grande")
+	// Justo en el tope sí entra.
+	if rec := e.putFile("/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/13", "application/octet-stream", big[:auth.MaxAssignmentFileSize]); rec.Code != http.StatusOK {
+		t.Fatalf("archivo en el tope: %d %s", rec.Code, rec.Body)
+	}
+	// Tope de 10 archivos por taller: ya hay 11 (id 11 y 13), se llenan hasta 10 en total y el siguiente falla.
+	for i := 14; i < 14+auth.MaxAssignmentFiles-2; i++ {
+		path := "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/" + strings.Repeat("9", i-13)
+		if rec := e.putFile(path, "text/plain", "x"); rec.Code != http.StatusOK {
+			t.Fatalf("archivo %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	e.failure("PUT", "/internal/v1/courses/d2l:ou:6650/assignments/d2l:folder:701/files/777", `x`, http.StatusUnprocessableEntity, "demasiados_archivos")
 }
 
 func mustUserID(t *testing.T, e *env, ext string) string {

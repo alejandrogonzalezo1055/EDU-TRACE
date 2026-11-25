@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const MaxAssignmentFiles = 10
+const (
+	MaxAssignmentFiles = 10
+	// MaxAssignmentFileSize: tamaño máximo de un archivo de taller (del docente o traído de Brightspace).
+	MaxAssignmentFileSize = 10 << 20
+)
 
 var (
 	ErrMonitorNotFound = errors.New("no hay una cuenta de estudiante o monitor con ese email; la persona debe haber entrado antes a EduTrace")

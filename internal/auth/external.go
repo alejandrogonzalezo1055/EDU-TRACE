@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"math"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -607,12 +609,17 @@ type ExternalAssignment struct {
 	ScoreDenominator *float64
 	GradeItemID string
 	IsHidden bool
+	// Attachments: adjuntos de la carpeta en Brightspace. nil = no se informó (no se toca nada);
+	// vacío = la carpeta no tiene adjuntos (se quitan los que vinieron de Brightspace).
+	Attachments *[]ExternalAttachment
 }
 
 type AssignmentsResult struct {
 	Created int `json:"created"`
 	Updated int `json:"updated"`
 	Hidden int `json:"hidden"`
+	// FilesNeeded: adjuntos que Go aún no tiene; Python los descarga y los envía (external_files.go).
+	FilesNeeded []FileNeeded `json:"files_needed"`
 }
 
 // deadlinePolicy deriva allow_late/late_until de la carpeta: la entrega tardía existe si la ventana de
@@ -650,6 +657,9 @@ func (s *Store) UpsertAssignments(courseExternalID string, items []ExternalAssig
 		if it.ScoreDenominator != nil && (math.IsNaN(*it.ScoreDenominator) || math.IsInf(*it.ScoreDenominator, 0) || *it.ScoreDenominator <= 0) {
 			return nil, invalid("score_denominator del taller %s debe ser mayor que 0", it.ExternalID)
 		}
+		if err := validateAttachments(it.ExternalID, it.Attachments); err != nil {
+			return nil, err
+		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -665,7 +675,8 @@ func (s *Store) UpsertAssignments(courseExternalID string, items []ExternalAssig
 	if err != nil {
 		return nil, err
 	}
-	res := &AssignmentsResult{}
+	res := &AssignmentsResult{FilesNeeded: []FileNeeded{}}
+	var stale []staleFile
 	now := fmtTime(time.Now().UTC())
 	for _, it := range items {
 		allowLate, lateUntil := deadlinePolicy(it.DueAt, it.EndAt)
@@ -710,6 +721,14 @@ func (s *Store) UpsertAssignments(courseExternalID string, items []ExternalAssig
 				res.Hidden++
 			}
 		}
+		if it.Attachments != nil {
+			needed, gone, err := reconcileAttachments(tx, id, it)
+			if err != nil {
+				return nil, err
+			}
+			res.FilesNeeded = append(res.FilesNeeded, needed...)
+			stale = append(stale, gone...)
+		}
 	}
 	// Lo que desapareció de Brightspace se oculta: puede tener entregas y revisiones.
 	existing, err := queryIDs(tx, `SELECT external_id FROM assignments WHERE group_id = ? AND external_id IS NOT NULL AND is_hidden = 0`, groupID)
@@ -725,7 +744,13 @@ func (s *Store) UpsertAssignments(courseExternalID string, items []ExternalAssig
 		}
 		res.Hidden++
 	}
-	return res, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for _, f := range stale {
+		os.Remove(filepath.Join(s.assignmentDir(f.assignmentID), f.fileID))
+	}
+	return res, nil
 }
 
 // mirroredAssignment devuelve los campos de solo lectura de un taller espejado de Brightspace,

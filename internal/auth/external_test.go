@@ -404,6 +404,189 @@ func TestUpsertAssignments(t *testing.T) {
 	}
 }
 
+// attachmentCourse deja un curso espejado con un docente y un estudiante, y devuelve el id de la clase.
+func attachmentCourse(t *testing.T, s *Store) (prof, ana *User, group string) {
+	t.Helper()
+	prof = extUser(t, s, "d2l:user:1", "Profe", "p@uni.example")
+	ana = extUser(t, s, "d2l:user:2", "Ana", "a@uni.example")
+	enroll(t, s, "d2l:user:1", ExternalEnrollment{Course: offering("d2l:ou:1", "Curso", true), Role: "teacher"})
+	r := enroll(t, s, "d2l:user:2", ExternalEnrollment{Course: offering("d2l:ou:1", "Curso", true), Role: "student"})
+	return prof, ana, r.Groups[0].GroupID
+}
+
+func assignmentIDByExternal(t *testing.T, s *Store, ext string) string {
+	t.Helper()
+	var id string
+	mustNoErr(t, s.db.QueryRow(`SELECT id FROM assignments WHERE external_id = ?`, ext).Scan(&id))
+	return id
+}
+
+func atts(list ...ExternalAttachment) *[]ExternalAttachment { return &list }
+
+func TestUpsertAssignmentsReportsFilesNeeded(t *testing.T) {
+	s := newTestStore(t)
+	attachmentCourse(t, s)
+
+	items := []ExternalAssignment{
+		{ExternalID: "d2l:folder:701", Title: "Taller 1", Attachments: atts(
+			ExternalAttachment{FileID: "11", Name: "uno.pdf", Size: 5}, ExternalAttachment{FileID: "12", Name: "dos.pdf", Size: 6})},
+		{ExternalID: "d2l:folder:702", Title: "Sin datos de adjuntos"}, // Attachments ausente: no se toca nada
+		{ExternalID: "d2l:folder:703", Title: "Oculto", IsHidden: true, Attachments: atts(ExternalAttachment{FileID: "21", Name: "x.pdf", Size: 1})},
+		{ExternalID: "d2l:folder:704", Title: "Enorme", Attachments: atts(ExternalAttachment{FileID: "31", Name: "grande.pdf", Size: MaxAssignmentFileSize + 1})},
+	}
+	res, err := s.UpsertAssignments("d2l:ou:1", items)
+	mustNoErr(t, err)
+	// Solo se piden los de talleres visibles y que Go aceptaría (<= 10 MB).
+	if len(res.FilesNeeded) != 2 || res.FilesNeeded[0] != (FileNeeded{Folder: "d2l:folder:701", FileID: "11", Name: "uno.pdf", Size: 5}) ||
+		res.FilesNeeded[1].FileID != "12" {
+		t.Fatalf("archivos pedidos: %+v", res.FilesNeeded)
+	}
+
+	// Tras guardar el 11 (5 bytes), ya no se pide. El 12 se guarda con otro tamaño del anunciado y se vuelve a pedir si D2L lo cambia.
+	_, err = s.SaveExternalAssignmentFile("d2l:ou:1", "d2l:folder:701", "11", "uno.pdf", "application/pdf", strings.NewReader("12345"), MaxAssignmentFileSize)
+	mustNoErr(t, err)
+	_, err = s.SaveExternalAssignmentFile("d2l:ou:1", "d2l:folder:701", "12", "dos.pdf", "application/pdf", strings.NewReader("123456"), MaxAssignmentFileSize)
+	mustNoErr(t, err)
+	res, err = s.UpsertAssignments("d2l:ou:1", items)
+	mustNoErr(t, err)
+	if len(res.FilesNeeded) != 0 {
+		t.Fatalf("no debe pedir lo que ya tiene: %+v", res.FilesNeeded)
+	}
+	items[0].Attachments = atts(ExternalAttachment{FileID: "11", Name: "uno.pdf", Size: 5}, ExternalAttachment{FileID: "12", Name: "dos.pdf", Size: 7})
+	res, err = s.UpsertAssignments("d2l:ou:1", items)
+	mustNoErr(t, err)
+	if len(res.FilesNeeded) != 1 || res.FilesNeeded[0].FileID != "12" || res.FilesNeeded[0].Size != 7 {
+		t.Fatalf("un archivo cambiado de tamaño se pide otra vez: %+v", res.FilesNeeded)
+	}
+
+	// Un archivo que el docente subió a mano (sin external_id) nunca se toca; el que D2L quitó sí se borra.
+	aid := assignmentIDByExternal(t, s, "d2l:folder:701")
+	mustNoErr(t, os.MkdirAll(s.assignmentDir(aid), 0o700))
+	mustNoErr(t, os.WriteFile(filepath.Join(s.assignmentDir(aid), "manual1"), []byte("mio"), 0o600))
+	_, err = s.db.Exec(`INSERT INTO assignment_files (id, assignment_id, name, size, content_type, position) VALUES ('manual1', ?, 'mio.txt', 3, 'text/plain', 99)`, aid)
+	mustNoErr(t, err)
+	var oldID string
+	mustNoErr(t, s.db.QueryRow(`SELECT id FROM assignment_files WHERE assignment_id = ? AND external_id = '11'`, aid).Scan(&oldID))
+	items[0].Attachments = atts(ExternalAttachment{FileID: "12", Name: "dos.pdf", Size: 7})
+	_, err = s.UpsertAssignments("d2l:ou:1", items)
+	mustNoErr(t, err)
+	var remaining []string
+	rows, err := s.db.Query(`SELECT name FROM assignment_files WHERE assignment_id = ? ORDER BY position`, aid)
+	mustNoErr(t, err)
+	for rows.Next() {
+		var n string
+		mustNoErr(t, rows.Scan(&n))
+		remaining = append(remaining, n)
+	}
+	rows.Close()
+	if strings.Join(remaining, ",") != "dos.pdf,mio.txt" {
+		t.Fatalf("archivos tras quitar el 11 en D2L: %v", remaining)
+	}
+	if _, err := os.Stat(filepath.Join(s.assignmentDir(aid), oldID)); !os.IsNotExist(err) {
+		t.Fatalf("el archivo quitado debe borrarse del disco: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.assignmentDir(aid), "manual1")); err != nil {
+		t.Fatalf("el archivo del docente no se toca: %v", err)
+	}
+
+	// Una lista de adjuntos vacía (no ausente) quita todos los de D2L y deja el del docente.
+	items[0].Attachments = atts()
+	_, err = s.UpsertAssignments("d2l:ou:1", items)
+	mustNoErr(t, err)
+	var n int
+	mustNoErr(t, s.db.QueryRow(`SELECT COUNT(*) FROM assignment_files WHERE assignment_id = ?`, aid).Scan(&n))
+	if n != 1 {
+		t.Fatalf("solo debe quedar el archivo del docente: %d", n)
+	}
+
+	// Datos inválidos.
+	for _, bad := range []ExternalAttachment{{FileID: "", Name: "a.pdf", Size: 1}, {FileID: "../x", Name: "a.pdf", Size: 1}, {FileID: "1", Name: "a.pdf", Size: -1}} {
+		if _, err := s.UpsertAssignments("d2l:ou:1", []ExternalAssignment{{ExternalID: "d2l:folder:701", Title: "T", Attachments: atts(bad)}}); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("adjunto inválido %+v: %v", bad, err)
+		}
+	}
+}
+
+func TestSaveExternalAssignmentFile(t *testing.T) {
+	s := newTestStore(t)
+	_, ana, _ := attachmentCourse(t, s)
+	_, err := s.UpsertAssignments("d2l:ou:1", []ExternalAssignment{{ExternalID: "d2l:folder:701", Title: "Taller 1"}})
+	mustNoErr(t, err)
+	aid := assignmentIDByExternal(t, s, "d2l:folder:701")
+	save := func(course, folder, file, body string, max int64) (*AssignmentFile, error) {
+		return s.SaveExternalAssignmentFile(course, folder, file, "../Taller 1.pdf", "application/pdf", strings.NewReader(body), max)
+	}
+
+	if _, err := save("d2l:ou:404", "d2l:folder:701", "11", "x", 100); !errors.Is(err, ErrUnknownCourse) {
+		t.Fatalf("curso desconocido: %v", err)
+	}
+	if _, err := save("d2l:ou:1", "d2l:folder:404", "11", "x", 100); !errors.Is(err, ErrUnknownAssignment) {
+		t.Fatalf("taller desconocido: %v", err)
+	}
+	if _, err := save("d2l:ou:1", "d2l:folder:701", "../11", "x", 100); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("id de archivo inválido: %v", err)
+	}
+	if _, err := save("d2l:ou:1", "d2l:folder:701", "11", "", 100); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("archivo vacío: %v", err)
+	}
+	if _, err := save("d2l:ou:1", "d2l:folder:701", "11", "0123456789", 4); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("archivo grande: %v", err)
+	}
+	if entries, _ := os.ReadDir(s.assignmentDir(aid)); len(entries) != 0 {
+		t.Fatalf("un rechazo no debe dejar archivos en disco: %d", len(entries))
+	}
+
+	f, err := save("d2l:ou:1", "d2l:folder:701", "11", "contenido-1", 100)
+	mustNoErr(t, err)
+	if f.Name != "Taller 1.pdf" || f.Size != 11 || f.ContentType != "application/pdf" {
+		t.Fatalf("archivo guardado: %+v", f)
+	}
+	got, err := os.ReadFile(filepath.Join(s.assignmentDir(aid), f.ID))
+	mustNoErr(t, err)
+	if string(got) != "contenido-1" {
+		t.Fatalf("contenido en disco: %q", got)
+	}
+	// El estudiante lo ve en el taller y puede descargarlo.
+	list := s.StudentAssignments(ana.ID)
+	if len(list) != 1 || len(list[0].Files) != 1 || list[0].Files[0].ID != f.ID {
+		t.Fatalf("el estudiante debe ver el archivo: %+v", list)
+	}
+	path, meta, err := s.AssignmentFilePath(ana, aid, f.ID)
+	mustNoErr(t, err)
+	if meta.Name != "Taller 1.pdf" {
+		t.Fatalf("meta: %+v", meta)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "contenido-1" {
+		t.Fatalf("descarga: %q", b)
+	}
+
+	// Repetir el mismo file_id reemplaza el contenido sin duplicar la fila ni dejar el archivo viejo.
+	f2, err := save("d2l:ou:1", "d2l:folder:701", "11", "nuevo", 100)
+	mustNoErr(t, err)
+	var n int
+	mustNoErr(t, s.db.QueryRow(`SELECT COUNT(*) FROM assignment_files WHERE assignment_id = ?`, aid).Scan(&n))
+	if n != 1 || f2.Size != 5 {
+		t.Fatalf("reemplazo: filas=%d archivo=%+v", n, f2)
+	}
+	if entries, _ := os.ReadDir(s.assignmentDir(aid)); len(entries) != 1 {
+		t.Fatalf("el archivo viejo debe borrarse: %d", len(entries))
+	}
+
+	// Tope de 10 archivos por taller (contando los del docente).
+	for i := 1; i < MaxAssignmentFiles; i++ {
+		_, err := s.db.Exec(`INSERT INTO assignment_files (id, assignment_id, name, size, content_type, position) VALUES (?, ?, 'm.txt', 1, '', ?)`,
+			"manual"+strings.Repeat("x", i), aid, 10+i)
+		mustNoErr(t, err)
+	}
+	if _, err := save("d2l:ou:1", "d2l:folder:701", "12", "otro", 100); !errors.Is(err, ErrTooManyFiles) {
+		t.Fatalf("más de 10 archivos: %v", err)
+	}
+	// Reemplazar uno existente sigue permitido con el taller lleno.
+	if _, err := save("d2l:ou:1", "d2l:folder:701", "11", "otra vez", 100); err != nil {
+		t.Fatalf("reemplazo con el taller lleno: %v", err)
+	}
+}
+
 func TestSessionTickets(t *testing.T) {
 	s := newTestStore(t)
 	u := extUser(t, s, "d2l:user:3101", "Camila", "c@uni.example")
@@ -546,6 +729,7 @@ func TestMigrateLegacyDatabase(t *testing.T) {
 		{"users", "external_id"}, {"courses", "external_id"}, {"class_groups", "external_id"}, {"assignments", "external_id"},
 		{"submissions", "external_id"}, {"assignments", "score_denominator"}, {"assignments", "grade_item_id"}, {"assignments", "is_hidden"},
 		{"group_students", "active"}, {"course_teachers", "active"}, {"submissions", "d2l_status"}, {"reviews", "d2l_status"},
+		{"assignment_files", "external_id"},
 	} {
 		var n int
 		mustNoErr(t, s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n))
