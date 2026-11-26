@@ -4,7 +4,7 @@ Plataforma de retroalimentación formativa para **Introducción a la Programaci�
 
 > EduTrace no califica sola. La IA propone; la decisión final siempre es del profesor.
 
-EduTrace se conecta con el **Campus Virtual** de la universidad (Brightspace, D2L) a través de un servicio en Python, [EduTrace - D2L Connection](https://github.com/alejandrogonzalezo1055/D2L-Connection): se entra con la cuenta de Brightspace y las clases, los roles y los talleres llegan de allí. Esa integración se resume en [Campus Virtual (Brightspace)](#campus-virtual-brightspace); el detalle está en el repositorio del servicio.
+EduTrace se conecta con el **Campus Virtual** de la universidad (Brightspace, D2L) a través de un servicio en Python, [EduTrace - Brightspace Hashi](https://github.com/alejandrogonzalezo1055/Brightspace-Hashi): se entra con la cuenta de Brightspace y las clases, los roles y los talleres llegan de allí. Esa integración se resume en [Campus Virtual (Brightspace)](#campus-virtual-brightspace); el detalle está en el repositorio del servicio.
 
 ## Qué hace
 
