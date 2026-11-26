@@ -194,7 +194,7 @@ GitHub Actions corre esas mismas pruebas en cada *push* y pull request, además 
 - [docs/RNF_COMPLIANCE.md](docs/RNF_COMPLIANCE.md): matriz de cumplimiento de los requisitos.
 - [docs/POLITICA_DATOS.md](docs/POLITICA_DATOS.md): qué datos se tratan y qué recibe la IA.
 - [docs/INTEGRACION_PYTHON.md](docs/INTEGRACION_PYTHON.md): contrato entre Go y el servicio Python de Brightspace, variables y cómo probarlo.
-- [EduTrace - D2L Connection](https://github.com/alejandrogonzalezo1055/D2L-Connection): repositorio y README del servicio Python.
+- [EduTrace - Brightspace Hashi](https://github.com/alejandrogonzalezo1055/Brightspace-Hashi): repositorio y README del servicio Python.
 - [docs/INTEGRACION.md](docs/INTEGRACION.md): análisis inicial de la integración con Campus Virtual (LTI y API de Brightspace); anterior al servicio Python.
 - [docs/TEST_DATA.md](docs/TEST_DATA.md): datos de prueba.
 - [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md): CI, CD, preparación del servidor, HTTPS, sandbox, respaldos, alertas y correo.
