@@ -53,7 +53,7 @@ EduTrace se conecta con el **Campus Virtual** de la universidad (Brightspace, D2
 
 ## Campus Virtual (Brightspace)
 
-La universidad usa Campus Virtual, que funciona sobre Brightspace (D2L). EduTrace no habla con Brightspace directamente: lo hace el servicio en Python **[EduTrace - D2L Connection](https://github.com/alejandrogonzalezo1055/D2L-Connection)**, que se encarga de la autenticación OAuth2 y de las llamadas a la API de Brightspace. Cómo funciona por dentro, sus rutas y su configuración están en el README de ese repositorio.
+La universidad usa Campus Virtual, que funciona sobre Brightspace (D2L). EduTrace no habla con Brightspace directamente: lo hace el servicio en Python **[EduTrace - Brightspace Hashi](https://github.com/alejandrogonzalezo1055/Brightspace-Hashi)**, que se encarga de la autenticación OAuth2 y de las llamadas a la API de Brightspace. Cómo funciona por dentro, sus rutas y su configuración están en el README de ese repositorio.
 
 Lo que esto significa para EduTrace:
 
@@ -80,7 +80,7 @@ flowchart LR
     B --> D[("SQLite<br/>data/edutrace.db")]
     B --> S["bubblewrap + g++"]
     B --> O["Ollama :11434"]
-    W -->|"Entrar con Brightspace"| P["Servicio Python :9000<br/>EduTrace - D2L Connection"]
+    W -->|"Entrar con Brightspace"| P["Servicio Python :9000<br/>EduTrace - Brightspace Hashi"]
     P -->|"/internal/v1/*"| B
     B -->|"entregas y notas (cola)"| P
     P -->|"OAuth2 + API"| L["Brightspace (Campus Virtual)"]
